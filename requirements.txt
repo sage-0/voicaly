@@ -1,0 +1,44 @@
+# PyTorch (cu128) — ACE-Step v1.5 requires torch 2.10
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchaudio==2.10.0+cu128
+
+# ACE-Step v1.5 core requirements
+transformers>=4.51.0,<4.58.0
+diffusers
+gradio==6.2.0
+matplotlib>=3.7.5
+scipy>=1.10.1
+soundfile>=0.13.1
+loguru>=0.7.3
+einops>=0.8.1
+accelerate>=1.12.0
+fastapi>=0.115.2,<1.0
+uvicorn[standard]>=0.27.0
+numba>=0.63.1
+vector-quantize-pytorch>=1.27.15
+torchao
+toml
+modelscope
+peft>=0.18.0
+lightning>=2.0.0
+xxhash
+flash-attn ; sys_platform == 'linux' and platform_machine == 'x86_64'
+triton>=3.0.0
+
+# Audio processing
+demucs>=4.0.1
+librosa==0.11.0
+numpy<2.0
+safetensors==0.7.0
+
+# DPO Gemma translation (also covered by transformers/peft above)
+pykakasi
+tqdm
+
+# Whisper for Best-of-N scoring
+faster-whisper>=1.0.0
+
+# Misc
+huggingface-hub>=0.28.1

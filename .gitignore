@@ -1,0 +1,19 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Mounted at runtime
+/cache/
+/.hf/
+/models/*
+!/models/.gitkeep
+
+# Local env
+.env
+.venv/
+venv/
+
+# Editor
+.vscode-server/
+.idea/
+.DS_Store
