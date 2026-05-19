@@ -32,9 +32,16 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // React updates the <audio src> attribute when audioUrl changes, but the
-  // element does not automatically reload — call .load() explicitly. Without
-  // this, clicking a different candidate continues playing the previous one.
+  // Track the latest `playing` value via a ref so the audioUrl-change effect
+  // can resume playback without re-firing every time `playing` toggles.
+  const playingRef = useRef(playing);
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+
+  // When the audio source changes (user picks a different candidate), the
+  // <audio> element keeps the old buffered data until we call .load(). After
+  // load() the element resets to paused — so if we WERE playing, restart it.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
@@ -42,6 +49,10 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     a.load();
     setCurrentTime(0);
     setDuration(0);
+    if (audioUrl && playingRef.current) {
+      // play() returns a Promise; the browser waits for canplay internally.
+      a.play().catch(err => console.warn('[Player] post-load play() rejected:', err));
+    }
   }, [audioUrl]);
 
   useEffect(() => {
@@ -64,6 +75,7 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
         const target = isFinite(d) && d > 0 ? Math.max(0, Math.min(t, d)) : Math.max(0, t);
         console.info('[Player] seekTo', t.toFixed(2), '→ clamped', target.toFixed(2));
         a.currentTime = target;
+        setCurrentTime(target);
       },
       getDuration: () => audioRef.current?.duration ?? 0,
     }),
@@ -72,14 +84,17 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
 
   const onProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const a = audioRef.current;
-    if (!a || !duration || !isFinite(duration)) return;
+    if (!a || !isFinite(duration) || duration <= 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    a.currentTime = ratio * duration;
-    console.info('[Player] progress-bar seek →', (ratio * duration).toFixed(2), 's');
+    const t = ratio * duration;
+    a.currentTime = t;
+    setCurrentTime(t);
+    console.info('[Player] progress-bar seek →', t.toFixed(2), 's');
   };
 
-  const progress = duration > 0 ? currentTime / duration : 0;
+  const hasDuration = isFinite(duration) && duration > 0;
+  const progress = hasDuration ? Math.min(1, currentTime / duration) : 0;
 
   return (
     <div
@@ -99,7 +114,11 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
           src={audioUrl}
           preload="metadata"
           onTimeUpdate={e => setCurrentTime((e.currentTarget as HTMLAudioElement).currentTime)}
-          onLoadedMetadata={e => setDuration((e.currentTarget as HTMLAudioElement).duration)}
+          onLoadedMetadata={e => {
+            const d = (e.currentTarget as HTMLAudioElement).duration;
+            console.info('[Player] loadedmetadata duration =', d);
+            setDuration(d);
+          }}
           onDurationChange={e => setDuration((e.currentTarget as HTMLAudioElement).duration)}
           onEnded={() => console.info('[Player] playback ended')}
           onError={e => console.error('[Player] audio error', (e.currentTarget as HTMLAudioElement).error)}
@@ -186,42 +205,67 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
           )}
         </button>
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <Waveform playing={playing} count={40} color={accent} height={36} seed={seed} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+
+          {/* Seek bar — taller and on a lighter track so it stays visible
+              even before the audio metadata loads. A round thumb gives the
+              user something to grab/aim at when seeking. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div
               onClick={onProgressBarClick}
               style={{
                 flex: 1,
-                height: 8,
-                borderRadius: 4,
-                background: 'var(--s3)',
-                overflow: 'hidden',
-                cursor: duration > 0 ? 'pointer' : 'default',
+                height: 6,
+                borderRadius: 3,
+                background: 'var(--border)',
+                cursor: hasDuration ? 'pointer' : 'default',
                 position: 'relative',
               }}
-              title={duration > 0 ? 'クリックでシーク' : undefined}
+              title={hasDuration ? 'クリックでシーク' : '音声を読み込み中…'}
             >
               <div
                 style={{
+                  position: 'absolute',
+                  left: 0,
+                  top: 0,
                   height: '100%',
                   width: `${progress * 100}%`,
                   background: `linear-gradient(90deg, ${accent}, ${accent}cc)`,
-                  borderRadius: 4,
+                  borderRadius: 3,
                   transition: 'width .1s linear',
                   pointerEvents: 'none',
+                }}
+              />
+              {/* Thumb — always rendered so the bar is clearly a slider */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: `${progress * 100}%`,
+                  transform: 'translate(-50%, -50%)',
+                  width: 14,
+                  height: 14,
+                  borderRadius: '50%',
+                  background: accent,
+                  border: '2px solid var(--bg)',
+                  boxShadow: `0 0 6px ${accent}aa`,
+                  pointerEvents: 'none',
+                  transition: 'left .1s linear',
                 }}
               />
             </div>
             <span
               style={{
                 fontSize: 11,
-                color: 'var(--t3)',
+                color: 'var(--t2)',
                 fontFamily: "'DM Mono', monospace",
                 flexShrink: 0,
+                minWidth: 90,
+                textAlign: 'right',
               }}
             >
-              {fmtTime(currentTime)} / {fmtTime(duration)}
+              {fmtTime(currentTime)} / {hasDuration ? fmtTime(duration) : '—:—'}
             </span>
           </div>
         </div>
