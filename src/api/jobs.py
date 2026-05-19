@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import sys
+import time
 import uuid
 from pathlib import Path
 from queue import Queue
 from threading import Lock, Thread
 from typing import Any
+
+logger = logging.getLogger("utaime.jobs")
 
 
 # In-memory job store: job_id -> job dict
@@ -26,7 +30,9 @@ def create_job() -> str:
         "queue": Queue(),
         "result": None,
         "error": None,
+        "created_at": time.time(),
     }
+    logger.info("[job %s] created", job_id)
     return job_id
 
 
@@ -65,9 +71,27 @@ def _handle_pipeline_event(
     job = _jobs[job_id]
     msg = payload.get("msg", "")
 
+    if stage == "translate_line":
+        # Per-line streaming event from DPO Gemma. Convert to the row shape
+        # the frontend already uses.
+        row = {
+            "id": int(payload.get("idx", 0)) + 1,
+            "ja": payload.get("japanese", ""),
+            "mora": payload.get("mora_count", 0),
+            "en": payload.get("english", ""),
+        }
+        total = int(payload.get("total", 0))
+        logger.info(
+            "[job %s] translate_line %d/%d  mora=%d  en=%r",
+            job_id, row["id"], total, row["mora"], row["en"][:60],
+        )
+        q.put({"type": "translation_line", "row": row, "total": total})
+
     if stage == "translate" and "translations" in payload:
         translations_cache = payload["translations"]
-        q.put({"type": "translation_ready", "rows": _translation_to_rows(translations_cache)})
+        rows = _translation_to_rows(translations_cache)
+        logger.info("[job %s] translation_ready (%d rows)", job_id, len(rows))
+        q.put({"type": "translation_ready", "rows": rows})
 
     q.put({
         "type": "progress",
@@ -106,6 +130,13 @@ def _handle_pipeline_event(
             ],
         }
         job["status"] = "done"
+        logger.info(
+            "[job %s] done — %d candidates, top=%s score=%.3f",
+            job_id,
+            len(result_candidates),
+            result_candidates[0]["tag"] if result_candidates else "(none)",
+            result_candidates[0]["score"] if result_candidates else -1.0,
+        )
 
     return translations_cache
 
@@ -122,6 +153,7 @@ def start_pipeline(
     def _run() -> None:
         job = _jobs[job_id]
         q: Queue = job["queue"]
+        t_start = time.time()
         try:
             # Ensure the webapp root is on sys.path so src.pipeline can be imported.
             repo = str(Path(__file__).resolve().parents[2])
@@ -130,9 +162,15 @@ def start_pipeline(
 
             from src.pipeline.orchestrator import run as orchestrator_run
 
+            logger.info(
+                "[job %s] starting pipeline (audio=%s lyrics=%d chars)",
+                job_id, audio_path.name, len(lyrics),
+            )
+
             # If another job is mid-flight, signal "queued" before blocking on
             # the lock so the SSE stream can show a waiting state.
             if _pipeline_lock.locked():
+                logger.info("[job %s] queued (pipeline lock held by another job)", job_id)
                 q.put({
                     "type": "progress",
                     "stage": "queued",
@@ -143,6 +181,7 @@ def start_pipeline(
             translations_cache: list[dict] = []
 
             with _pipeline_lock:
+                logger.info("[job %s] acquired pipeline lock, running orchestrator", job_id)
                 for stage, pct, payload in orchestrator_run(
                     audio_path, lyrics, cache_root, dpo_model_path
                 ):
@@ -150,12 +189,15 @@ def start_pipeline(
                         job_id, q, stage, pct, payload, translations_cache
                     )
 
+            elapsed = time.time() - t_start
+            logger.info("[job %s] pipeline finished in %.1fs", job_id, elapsed)
             q.put({"type": "done"})
 
         except Exception as exc:
             import traceback
 
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            logger.error("[job %s] pipeline failed: %s\n%s", job_id, exc, tb)
             job["status"] = "error"
             job["error"] = str(exc)
             q.put({"type": "error", "message": str(exc)})

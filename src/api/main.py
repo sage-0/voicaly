@@ -4,18 +4,45 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import time
 from pathlib import Path
 from queue import Empty
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api import jobs as jobs_module
 
+# Initialize app logging. Outputs go to stderr → captured by `docker logs`.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("utaime.api")
+
 app = FastAPI(title="Utaime API")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every HTTP request with status code and duration. SSE streams
+    legitimately take a long time; their duration here measures only the
+    handshake, not the full stream lifetime."""
+    t0 = time.time()
+    try:
+        response = await call_next(request)
+        dt = (time.time() - t0) * 1000
+        logger.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, dt)
+        return response
+    except Exception as exc:
+        dt = (time.time() - t0) * 1000
+        logger.exception("%s %s → 500 (%.0fms): %s", request.method, request.url.path, dt, exc)
+        raise
 
 # Same-origin in production (frontend served from this server). CORS '*' is
 # safe because browsers refuse to attach credentials to wildcard origins,
@@ -103,6 +130,11 @@ async def create_job(
     upload_dir.mkdir(parents=True, exist_ok=True)
     audio_path = upload_dir / f"input{suffix}"
     audio_path.write_bytes(content)
+
+    logger.info(
+        "[job %s] POST /api/jobs accepted — audio=%s (%d bytes), t_model=%s, c_model=%s, lyrics=%d chars",
+        job_id, audio_file.filename, len(content), translation_model, cover_model, len(lyrics),
+    )
 
     jobs_module.start_pipeline(
         job_id=job_id,

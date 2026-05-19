@@ -123,15 +123,31 @@ def _stage_translate(
     lyrics_text: str,
     model_path: str,
     out_path: Path,
-) -> list[dict]:
-    """Translate JP lyrics line-by-line with the DPO Gemma model.
+):
+    """Generator yielding per-line + final translation events.
 
-    Settings match the user-validated cache/dpo_translation/translation.json
-    (single sample per line, temperature=0.5, max_new_tokens=60). Sampling
-    is seeded so output is reproducible across runs.
+    Yields tuples ``(event_type, payload)``:
+        ``("line", {idx, total, japanese, mora_count, english})`` — once per line
+        ``("result", list_of_cleaned_dicts)`` — final list after sanitization
+
+    The cleaned/sanitized result is what gets cached to disk. The per-line
+    events use lightly-cleaned raw text so the UI can display them live
+    before the final sanitization pass runs.
     """
     if out_path.exists():
-        return json.loads(out_path.read_text("utf-8"))
+        cached = json.loads(out_path.read_text("utf-8"))
+        # Even for cached translations, replay them as line events so the
+        # frontend's streaming UI behaves the same way.
+        for idx, row in enumerate(cached):
+            yield "line", {
+                "idx": idx,
+                "total": len(cached),
+                "japanese": row.get("japanese", ""),
+                "mora_count": row.get("mora_count", 0),
+                "english": row.get("english", ""),
+            }
+        yield "result", cached
+        return
 
     import torch
 
@@ -142,16 +158,38 @@ def _stage_translate(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
 
+    print(f"[translate] Loading DPO model from {model_path}", flush=True)
     tr = LyricsTranslator(model_path=model_path)
     lyrics_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
-    raw = tr.translate(lyrics_lines, max_new_tokens=60, temperature=0.5)
+    total = len(lyrics_lines)
+    print(f"[translate] Translating {total} lines", flush=True)
+
+    raw: list[dict] = []
+    for idx, result in enumerate(
+        tr.translate_iter(lyrics_lines, max_new_tokens=60, temperature=0.5)
+    ):
+        raw.append(result)
+        live_english = _clean_meta(result.get("english_translation", "")).strip()
+        print(
+            f"[translate] line {idx + 1}/{total}  mora={result['target_syllables']}  → {live_english[:80]}",
+            flush=True,
+        )
+        yield "line", {
+            "idx": idx,
+            "total": total,
+            "japanese": result["original_japanese"],
+            "mora_count": result["target_syllables"],
+            "english": live_english,
+        }
+
     cleaned = parse_translation(raw, mora_counter=tr.count_mora)
     for row in cleaned:
         row["english"] = _clean_meta(row.get("english", ""))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
-    return cleaned
+    print(f"[translate] Done. Cached to {out_path}", flush=True)
+    yield "result", cleaned
 
 
 _WHISPER_MODEL = None
@@ -465,9 +503,17 @@ def run(
 
     yield ("translate", 0.20, {"msg": "Translating lyrics with DPO Gemma..."})
     t0 = time.time()
-    translations = _stage_translate(
+    translations: list[dict] = []
+    for ev_type, payload in _stage_translate(
         lyrics_text, dpo_model_path, lyrics_cache / "translation.json"
-    )
+    ):
+        if ev_type == "line":
+            # Reserve 0.20–0.55 for translation; allocate proportionally per line.
+            line_pct = 0.20 + 0.35 * (payload["idx"] + 1) / max(payload["total"], 1)
+            yield ("translate_line", line_pct, payload)
+        elif ev_type == "result":
+            translations = payload
+
     yield (
         "translate",
         0.55,

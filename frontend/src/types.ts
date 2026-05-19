@@ -47,11 +47,20 @@ export interface GenConfig {
 }
 
 export interface SSEEvent {
-  type: 'progress' | 'translation_ready' | 'candidate_progress' | 'done' | 'error';
+  type:
+    | 'progress'
+    | 'translation_ready'
+    | 'translation_line'
+    | 'candidate_progress'
+    | 'done'
+    | 'error';
   stage?: string;
   pct?: number;
   message?: string;
+  /** Final batch of rows (sent once at the end of the translation stage). */
   rows?: TranslationRow[];
+  /** A single live row (sent as DPO finishes each line). */
+  row?: TranslationRow;
   done?: number;
   total?: number;
 }

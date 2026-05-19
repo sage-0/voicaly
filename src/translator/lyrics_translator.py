@@ -89,41 +89,49 @@ class LyricsTranslator:
         )
         return prompt
 
+    def _translate_one(self, line: str, max_new_tokens: int, temperature: float, top_p: float) -> dict:
+        """Translate a single line and return the raw result dict."""
+        mora_count = self.count_mora(line)
+        prompt = self.build_prompt(line, mora_count)
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+
+        input_length = inputs.input_ids.shape[1]
+        generated_tokens = outputs[0][input_length:]
+        translation = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+
+        return {
+            "original_japanese": line,
+            "target_syllables": mora_count,
+            "english_translation": translation,
+        }
+
     def translate(self, lyrics_list: list, max_new_tokens: int = 50, temperature: float = 0.7, top_p: float = 0.9):
-        """Translate a list of Japanese lyrics to English."""
+        """Translate a list of Japanese lyrics to English (blocking, returns the full list)."""
         results = []
         for line in tqdm(lyrics_list, desc="Translating Lyrics"):
             if not line.strip():
                 continue
-                
-            mora_count = self.count_mora(line)
-            prompt = self.build_prompt(line, mora_count)
-            
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-            
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id
-                )
-            
-            # Extract only the newly generated tokens
-            input_length = inputs.input_ids.shape[1]
-            generated_tokens = outputs[0][input_length:]
-            translation = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-            
-            results.append({
-                "original_japanese": line,
-                "target_syllables": mora_count,
-                "english_translation": translation
-            })
-            
+            results.append(self._translate_one(line, max_new_tokens, temperature, top_p))
         return results
+
+    def translate_iter(self, lyrics_list: list, max_new_tokens: int = 50, temperature: float = 0.7, top_p: float = 0.9):
+        """Streaming version of translate(). Yields each line's result dict as soon as it's produced."""
+        for line in lyrics_list:
+            if not line.strip():
+                continue
+            yield self._translate_one(line, max_new_tokens, temperature, top_p)
 
     def save_to_json(self, results: list, output_path: str):
         """Save translation results to a JSON file."""

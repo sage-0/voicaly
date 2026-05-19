@@ -13,13 +13,32 @@ export async function createJob(config: GenConfig, audioFile: File): Promise<str
   form.append('scoring', config.params.scoring);
   form.append('threshold', String(config.params.threshold));
 
+  console.info('[API] POST /api/jobs', {
+    audio: audioFile.name,
+    audio_size: audioFile.size,
+    tModel: config.tModel,
+    cModel: config.cModel,
+    params: config.params,
+  });
+
   const res = await fetch('/api/jobs', { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`Failed to create job: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error('[API] POST /api/jobs failed', res.status, body);
+    throw new Error(`Failed to create job: ${res.status} ${body || ''}`.trim());
+  }
   const { job_id } = await res.json();
+  console.info('[API] job created', job_id);
   return job_id;
 }
 
 export async function getJobResult(jobId: string): Promise<JobResult> {
+  console.info('[API] GET /api/jobs/' + jobId + '/result');
   const res = await fetch(`/api/jobs/${jobId}/result`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error('[API] GET result failed', res.status, body);
+    throw new Error(`Failed to fetch result: ${res.status} ${body || ''}`.trim());
+  }
   return res.json();
 }
