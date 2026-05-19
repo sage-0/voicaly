@@ -108,12 +108,16 @@ def _handle_pipeline_event(
 
         result_candidates = []
         for i, c in enumerate(candidates):
-            fname = Path(c["final_wav"]).name
+            # Every candidate's final WAV is named `final.wav` (just nested
+            # under a tag-specific subdir on disk). We expose the tag in the
+            # URL so the browser receives a unique address per candidate —
+            # otherwise the audio element refuses to switch sources because
+            # the URL hasn't changed.
             result_candidates.append({
                 "rank": i + 1,
                 "tag": c["tag"],
                 "score": c["score"],
-                "audio_url": f"/api/audio/{job_id}/{fname}",
+                "audio_url": f"/api/audio/{job_id}/{c['tag']}.wav",
                 "seed": c["seed"],
                 "strength": c["strength"],
                 "mode": c["mode"],

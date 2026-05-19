@@ -226,8 +226,15 @@ async def serve_audio(job_id: str, filename: str) -> FileResponse:
     if job is None or not job.get("result"):
         raise HTTPException(status_code=404, detail="job or result not found")
 
+    # URL filename is `<tag>.wav`; on disk every candidate stores its result
+    # under `<tag>/final.wav`. Resolve via _raw_candidates so we look up the
+    # actual path by tag, not by basename (which is identical for all).
+    if not filename.endswith(".wav"):
+        raise HTTPException(status_code=400, detail="not a wav request")
+    tag = filename[:-4]
+
     for rc in job["result"].get("_raw_candidates", []):
-        if Path(rc["final_wav"]).name == filename:
+        if rc["tag"] == tag:
             wav_path = Path(rc["final_wav"])
             if not wav_path.is_file():
                 raise HTTPException(status_code=404, detail="audio file missing on disk")
