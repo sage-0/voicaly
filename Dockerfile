@@ -2,14 +2,17 @@
 #
 # Lyrics→English Singing Web App
 # ===============================
-# Single-image build that runs the full pipeline behind a Gradio UI.
+# Multi-stage build:
+#   Stage 1 (frontend-build): Node 20 — builds Vite+React into /build/dist
+#   Stage 2 (runtime):        CUDA 12.8 + Python 3.12 — runs FastAPI / uvicorn
 #
 # Stages:
-#   1. CUDA 12.8 + Python 3.11 base
-#   2. apt-time deps (ffmpeg, build tools, git)
-#   3. pip install PyTorch 2.10 cu128 + project requirements
-#   4. Clone & install ACE-Step v1.5 (needs Python ≥ 3.11)
-#   5. Copy app source
+#   1. Node 20: install npm deps, run vite build
+#   2. CUDA 12.8 + Python 3.12 base
+#   3. apt-time deps (ffmpeg, build tools, git)
+#   4. pip install PyTorch 2.10 cu128 + project requirements
+#   5. Clone & install ACE-Step v1.5 (needs Python ≥ 3.11)
+#   6. Copy app source + frontend dist
 #
 # Run-time expectations:
 #   - Mount the host's ACE-Step v1.5 model snapshot to /app/models/ace-step-v1.5
@@ -17,6 +20,15 @@
 #   - Mount a writable cache directory to /app/cache
 #   - Bind GPU: --gpus all
 
+# ---- Stage 1: フロントエンドビルド -----------------------------------------
+FROM node:20-slim AS frontend-build
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --prefer-offline 2>/dev/null || npm install
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: Python + CUDA ------------------------------------------------
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -40,7 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
 # ---- 2. PyTorch (cu128) -------------------------------------------------
-RUN python3 -m pip install --break-system-packages --upgrade pip setuptools wheel \
+# --ignore-installed is needed because Ubuntu 24.04's pip ships from dpkg
+# without a RECORD file, so a normal --upgrade fails to uninstall it first.
+RUN python3 -m pip install --break-system-packages --ignore-installed pip setuptools wheel \
  && python3 -m pip install --break-system-packages \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         "torch==2.10.0+cu128" "torchvision==0.25.0+cu128" "torchaudio==2.10.0+cu128"
@@ -61,7 +75,10 @@ RUN git clone --depth 1 https://github.com/ace-step/ACE-Step-1.5.git /opt/ACE-St
 COPY src /app/src
 
 # Cache and models are mount points; they're created at runtime.
-RUN mkdir -p /app/cache /app/models /app/.hf
+RUN mkdir -p /app/cache /app/models /app/.hf /app/frontend/dist
+
+# フロントエンドの静的ファイルをコピー
+COPY --from=frontend-build /build/dist /app/frontend/dist
 
 EXPOSE 7860
 
@@ -74,4 +91,4 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cublas/lib:\
 /usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:\
 /usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/lib
 
-ENTRYPOINT ["python3", "-m", "src.web.app"]
+ENTRYPOINT ["python3", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "7860"]

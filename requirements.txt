@@ -24,7 +24,11 @@ modelscope
 peft>=0.18.0
 lightning>=2.0.0
 xxhash
-flash-attn ; sys_platform == 'linux' and platform_machine == 'x86_64'
+# flash-attn breaks pip's build-isolation step (its setup.py imports torch
+# before pip has installed torch into the isolated build env). It's an
+# attention-kernel optimization, not required for ACE-Step inference; re-add
+# with --no-build-isolation in the Dockerfile if profiling shows it's needed.
+# flash-attn ; sys_platform == 'linux' and platform_machine == 'x86_64'
 triton>=3.0.0
 
 # Audio processing
@@ -42,3 +46,4 @@ faster-whisper>=1.0.0
 
 # Misc
 huggingface-hub>=0.28.1
+python-multipart>=0.0.9

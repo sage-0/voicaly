@@ -1,29 +1,22 @@
 services:
   webapp:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: lyrics-webapp:latest
     container_name: lyrics-webapp
     restart: unless-stopped
     ports:
-      - "${GRADIO_PORT:-7860}:7860"
+      - "${WEBAPP_PORT:-7860}:7860"
     volumes:
-      # Models — bind-mount from host. See README for download instructions.
-      - ./models:/app/models:ro
-      # Persistent cache for separated stems, translations, ACE-Step candidates.
-      - ./cache:/app/cache
-      # Hugging Face hub cache (so models you DL on the host or inside the
-      # container persist across rebuilds).
-      - ./.hf:/app/.hf
+      # All paths must be absolute and host-visible (compose runs inside a
+      # devcontainer whose CWD does not match the host filesystem).
+      - ${MODELS_DIR}:/app/models:ro
+      - ${CACHE_DIR}:/app/cache
+      - ${HF_DIR}:/app/.hf
     environment:
       # Override these by setting them in your shell or a `.env` file.
       ACE_CKPT_DIR: /app/models/ace-step-v1.5
       DPO_MODEL_PATH: /app/models/gemma-dpo-final
       PIPELINE_CACHE_ROOT: /app/cache
       HF_HOME: /app/.hf
-      GRADIO_HOST: 0.0.0.0
-      GRADIO_PORT: 7860
     deploy:
       resources:
         reservations:

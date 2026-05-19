@@ -1,0 +1,77 @@
+:root {
+  --bg: #080a12;
+  --s1: #0f1120;
+  --s2: #171a2a;
+  --s3: #1f2238;
+  --border: #252844;
+  --border-hi: #353860;
+  --accent: #e8853a;
+  --accent-s: rgba(232,133,58,.12);
+  --accent-m: rgba(232,133,58,.32);
+  --teal: #2bbfaa;
+  --teal-s: rgba(43,191,170,.1);
+  --text: #eaeaf5;
+  --t2: #9090b8;
+  --t3: #54547a;
+  --r: 10px;
+  --r2: 16px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+}
+
+@keyframes bar {
+  0%, 100% { transform: scaleY(.25); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(.82); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: .6; }
+  50%       { opacity: 1; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes float {
+  0%   { opacity: 0; transform: translateY(0) scale(.8); }
+  40%  { opacity: .8; }
+  100% { opacity: 0; transform: translateY(-64px) scale(1.1); }
+}
+
+@keyframes cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
