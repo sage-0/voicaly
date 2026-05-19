@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { JobResult, GenConfig, Candidate } from '../types';
 import { Player, type PlayerHandle } from '../components/Player';
 import { SectionLabel } from '../components/SectionLabel';
+import { buildTranslationMarkdown, downloadTextFile, suggestedFilename } from '../utils/export';
 
 interface ResultsPhaseProps {
   result: JobResult;
@@ -48,6 +49,16 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
     console.info('[Results] candidate selected', c.tag, c.audio_url);
     setSelectedCand(c);
     setPlaying(true);
+  };
+
+  // Export the translation + the parameters that produced it as a Markdown
+  // file. The user explicitly asked for the config to be included so they
+  // can reproduce this exact run later.
+  const onDownloadTranslation = () => {
+    const md = buildTranslationMarkdown(result, config, selectedCand ?? null);
+    const filename = suggestedFilename(config.audioFile?.name, 'md');
+    console.info('[Results] downloading translation →', filename);
+    downloadTextFile(md, filename, 'text/markdown');
   };
 
   // Click a lyric line → jump to a proportional position in the audio.
@@ -161,33 +172,76 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
 
         {/* Right panel with tabs */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {/* Tabs */}
-          <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-            {(
-              [
-                { id: 'translation', label: 'Translation' },
-                { id: 'details', label: 'Candidate Details' },
-              ] as const
-            ).map(t => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                style={{
-                  padding: '10px 18px',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  border: 'none',
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  color: activeTab === t.id ? 'var(--text)' : 'var(--t3)',
-                  borderBottom: activeTab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
-                  marginBottom: -1,
-                  transition: 'color .15s',
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
+          {/* Tabs + export button */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'space-between',
+              borderBottom: '1px solid var(--border)',
+              marginBottom: 16,
+            }}
+          >
+            <div style={{ display: 'flex' }}>
+              {(
+                [
+                  { id: 'translation', label: 'Translation' },
+                  { id: 'details', label: 'Candidate Details' },
+                ] as const
+              ).map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setActiveTab(t.id)}
+                  style={{
+                    padding: '10px 18px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    color: activeTab === t.id ? 'var(--text)' : 'var(--t3)',
+                    borderBottom: activeTab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
+                    marginBottom: -1,
+                    transition: 'color .15s',
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={onDownloadTranslation}
+              title="翻訳結果と設定パラメータを Markdown でダウンロード"
+              style={{
+                marginBottom: 6,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 500,
+                color: 'var(--t2)',
+                background: 'var(--s2)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                transition: 'all .15s',
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--text)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-hi)';
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--t2)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              Export .md
+            </button>
           </div>
 
           {activeTab === 'translation' ? (

@@ -180,10 +180,17 @@ def start_pipeline(
 
             translations_cache: list[dict] = []
 
+            # Isolate each job's cache under the job UUID so re-uploading the
+            # same audio/lyrics always triggers a fresh run. The shared
+            # cache_root (`/app/cache`) just becomes a parent directory of
+            # job-scoped subdirectories.
+            job_cache_root = cache_root / job_id
+            logger.info("[job %s] cache dir: %s (isolated, no cross-job reuse)", job_id, job_cache_root)
+
             with _pipeline_lock:
                 logger.info("[job %s] acquired pipeline lock, running orchestrator", job_id)
                 for stage, pct, payload in orchestrator_run(
-                    audio_path, lyrics, cache_root, dpo_model_path
+                    audio_path, lyrics, job_cache_root, dpo_model_path
                 ):
                     translations_cache = _handle_pipeline_event(
                         job_id, q, stage, pct, payload, translations_cache
