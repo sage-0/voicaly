@@ -69,11 +69,11 @@ export function ParamsPanel({ p, set }: ParamsPanelProps) {
         onChange={v => set('candidates', v)}
       />
 
-      {/* Strength */}
+      {/* Strength — useful range is roughly 0.20–0.35 for lego mode */}
       <SliderRow
         label="Strength"
         value={p.strength}
-        min={0} max={1} step={0.05}
+        min={0.1} max={0.5} step={0.01}
         onChange={v => set('strength', v)}
         fmt={v => v.toFixed(2)}
       />

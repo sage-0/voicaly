@@ -65,7 +65,9 @@ COPY requirements.txt /app/requirements.txt
 RUN python3 -m pip install --break-system-packages -r /app/requirements.txt
 
 # torchcodec needs to match torch 2.10; ffmpeg is provided by apt above.
-RUN python3 -m pip install --break-system-packages "torchcodec>=0.12,<0.13"
+# 0.12+ requires torch 2.11+ (uses torch_from_blob symbol that isn't in 2.10);
+# stay on 0.10 for compatibility with our pinned torch.
+RUN python3 -m pip install --break-system-packages "torchcodec>=0.10,<0.11"
 
 # ---- 4. ACE-Step v1.5 (clone + install --no-deps to keep our pins) ------
 RUN git clone --depth 1 https://github.com/ace-step/ACE-Step-1.5.git /opt/ACE-Step-1.5 \

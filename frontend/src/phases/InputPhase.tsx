@@ -9,23 +9,24 @@ interface InputPhaseProps {
   onGenerate: (config: GenConfig) => void;
 }
 
+// Translation: only DPO-finetuned Gemma is wired up today. The pill list
+// is a single item so the UI shape stays consistent when we add more later.
 const T_MODELS: ModelDef[] = [
-  { id: 'claude',  label: 'Claude 3.5 Sonnet', org: 'Anthropic', clr: '#d4720d' },
-  { id: 'gpt4o',  label: 'GPT-4o Turbo',       org: 'OpenAI',    clr: '#10a37f' },
-  { id: 'gemini', label: 'Gemini 1.5 Pro',      org: 'Google',    clr: '#4285f4' },
-  { id: 'deepl',  label: 'DeepL Neural MT',     org: 'DeepL',     clr: '#0f2b46' },
+  { id: 'gemma-dpo', label: 'DPO Gemma 2B', org: 'Custom', clr: '#d4720d' },
 ];
 
+// Cover generation: only ACE-Step v1 is wired up. Other engines (v2 fast,
+// YourTTS, VALL-E X) are intentionally hidden — re-add to this list when
+// the backend actually supports routing to them.
 const C_MODELS: ModelDef[] = [
-  { id: 'ace1',   label: 'ACE-Step v1',      org: 'ByteDance', desc: 'High quality · 5–7 min/track' },
-  { id: 'ace2',   label: 'ACE-Step v2 Fast', org: 'ByteDance', desc: 'Faster · 2–3 min/track' },
-  { id: 'ytts',   label: 'YourTTS',          org: 'Coqui',     desc: 'Voice cloning · fastest' },
-  { id: 'vallex', label: 'VALL-E X',         org: 'Microsoft', desc: 'Cross-lingual · experimental' },
+  { id: 'ace1', label: 'ACE-Step v1.5', org: 'ACE-Step', desc: 'XL turbo 5B · lego mode' },
 ];
 
+// Defaults mirror orchestrator constants (ACE_LEGO_STRENGTH=0.28, anchor
+// seed=42, 10 candidates in ACE_CANDIDATES, whisper word-overlap scoring).
 const DEF_PARAMS: GenParams = {
-  mode: 'lego', seed: 31415, strength: 0.25,
-  candidates: 8, scoring: 'whisper', threshold: 0.4,
+  mode: 'lego', seed: 42, strength: 0.28,
+  candidates: 10, scoring: 'whisper', threshold: 0.4,
 };
 
 function fmt(bytes: number) {
@@ -37,7 +38,7 @@ export function InputPhase({ onGenerate }: InputPhaseProps) {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [lyrics, setLyrics] = useState('');
-  const [tModel, setTModel] = useState<TranslationModel>('claude');
+  const [tModel, setTModel] = useState<TranslationModel>('gemma-dpo');
   const [cModel, setCModel] = useState<CoverModel>('ace1');
   const [params, setParams] = useState<GenParams>(DEF_PARAMS);
   const [showParams, setShowParams] = useState(false);

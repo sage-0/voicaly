@@ -1,5 +1,7 @@
-export type TranslationModel = 'claude' | 'gpt4o' | 'gemini' | 'deepl';
-export type CoverModel = 'ace1' | 'ace2' | 'ytts' | 'vallex';
+// Only models we actually run today. New ids can be added here without
+// touching the rest of the type tree.
+export type TranslationModel = 'gemma-dpo';
+export type CoverModel = 'ace1';
 export type Phase = 'input' | 'processing' | 'results';
 export type ScoringMode = 'whisper' | 'ear' | 'both';
 

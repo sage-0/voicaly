@@ -17,3 +17,7 @@ venv/
 .vscode-server/
 .idea/
 .DS_Store
+
+# Frontend build artifacts
+frontend/dist/
+frontend/node_modules/
