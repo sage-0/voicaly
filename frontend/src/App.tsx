@@ -82,7 +82,7 @@ export default function App() {
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
             }}>
-              Utaime
+              Voicary
             </span>
             <span style={{ fontSize: 12, color: 'var(--t3)', fontWeight: 400 }}>
               日本語歌唱 → English Cover Generator
