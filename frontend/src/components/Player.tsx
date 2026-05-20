@@ -1,11 +1,10 @@
-import { useRef, useEffect, useState, useImperativeHandle, forwardRef } from 'react';
-import { Waveform } from './Waveform';
+import { useRef, useEffect, useState, useImperativeHandle, useCallback, forwardRef } from 'react';
+import { AudioWaveform } from './AudioWaveform';
 
 interface PlayerProps {
   label?: string;
   playing: boolean;
   onToggle: () => void;
-  seed?: number;
   accent?: string;
   audioUrl?: string;
 }
@@ -25,7 +24,7 @@ function fmtTime(s: number): string {
 }
 
 export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
-  { label = 'Audio', playing, onToggle, seed = 0, accent = 'var(--accent)', audioUrl },
+  { label = 'Audio', playing, onToggle, accent = 'var(--accent)', audioUrl },
   ref,
 ) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -50,7 +49,6 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     setCurrentTime(0);
     setDuration(0);
     if (audioUrl && playingRef.current) {
-      // play() returns a Promise; the browser waits for canplay internally.
       a.play().catch(err => console.warn('[Player] post-load play() rejected:', err));
     }
   }, [audioUrl]);
@@ -65,36 +63,28 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
     }
   }, [playing]);
 
+  // Unified seek helper used by both the imperative handle (lyric jump) and
+  // the waveform click handler.
+  const seek = useCallback((t: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const d = a.duration;
+    const target = isFinite(d) && d > 0 ? Math.max(0, Math.min(t, d)) : Math.max(0, t);
+    console.info('[Player] seek', t.toFixed(2), '→ clamped', target.toFixed(2));
+    a.currentTime = target;
+    setCurrentTime(target);
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
-      seekTo: (t: number) => {
-        const a = audioRef.current;
-        if (!a) return;
-        const d = a.duration;
-        const target = isFinite(d) && d > 0 ? Math.max(0, Math.min(t, d)) : Math.max(0, t);
-        console.info('[Player] seekTo', t.toFixed(2), '→ clamped', target.toFixed(2));
-        a.currentTime = target;
-        setCurrentTime(target);
-      },
+      seekTo: seek,
       getDuration: () => audioRef.current?.duration ?? 0,
     }),
-    [],
+    [seek],
   );
 
-  const onProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const a = audioRef.current;
-    if (!a || !isFinite(duration) || duration <= 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const t = ratio * duration;
-    a.currentTime = t;
-    setCurrentTime(t);
-    console.info('[Player] progress-bar seek →', t.toFixed(2), 's');
-  };
-
   const hasDuration = isFinite(duration) && duration > 0;
-  const progress = hasDuration ? Math.min(1, currentTime / duration) : 0;
 
   return (
     <div
@@ -205,68 +195,26 @@ export const Player = forwardRef<PlayerHandle, PlayerProps>(function Player(
           )}
         </button>
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <Waveform playing={playing} count={40} color={accent} height={36} seed={seed} />
-
-          {/* Seek bar — taller and on a lighter track so it stays visible
-              even before the audio metadata loads. A round thumb gives the
-              user something to grab/aim at when seeking. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              onClick={onProgressBarClick}
-              style={{
-                flex: 1,
-                height: 6,
-                borderRadius: 3,
-                background: 'var(--border)',
-                cursor: hasDuration ? 'pointer' : 'default',
-                position: 'relative',
-              }}
-              title={hasDuration ? 'クリックでシーク' : '音声を読み込み中…'}
-            >
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  height: '100%',
-                  width: `${progress * 100}%`,
-                  background: `linear-gradient(90deg, ${accent}, ${accent}cc)`,
-                  borderRadius: 3,
-                  transition: 'width .1s linear',
-                  pointerEvents: 'none',
-                }}
-              />
-              {/* Thumb — always rendered so the bar is clearly a slider */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '50%',
-                  left: `${progress * 100}%`,
-                  transform: 'translate(-50%, -50%)',
-                  width: 14,
-                  height: 14,
-                  borderRadius: '50%',
-                  background: accent,
-                  border: '2px solid var(--bg)',
-                  boxShadow: `0 0 6px ${accent}aa`,
-                  pointerEvents: 'none',
-                  transition: 'left .1s linear',
-                }}
-              />
-            </div>
-            <span
-              style={{
-                fontSize: 11,
-                color: 'var(--t2)',
-                fontFamily: "'DM Mono', monospace",
-                flexShrink: 0,
-                minWidth: 90,
-                textAlign: 'right',
-              }}
-            >
-              {fmtTime(currentTime)} / {hasDuration ? fmtTime(duration) : '—:—'}
-            </span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <AudioWaveform
+            audioUrl={audioUrl}
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={seek}
+            accent={accent}
+            height={64}
+          />
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: 11,
+              color: 'var(--t3)',
+              fontFamily: "'DM Mono', monospace",
+            }}
+          >
+            <span>{fmtTime(currentTime)}</span>
+            <span>{hasDuration ? fmtTime(duration) : '—:—'}</span>
           </div>
         </div>
       </div>
