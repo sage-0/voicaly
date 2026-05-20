@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api import jobs as jobs_module
+from src.api import presets as presets_module
+from src.api.presets import Preset
 
 # Initialize app logging. Outputs go to stderr → captured by `docker logs`.
 logging.basicConfig(
@@ -82,6 +84,42 @@ async def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Preset CRUD
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/presets")
+async def list_presets_endpoint() -> JSONResponse:
+    """Return all presets (built-in first, then user-created)."""
+    return JSONResponse({"presets": presets_module.list_presets()})
+
+
+@app.post("/api/presets", status_code=201)
+async def create_preset_endpoint(body: dict) -> JSONResponse:
+    """Create a new user preset.
+
+    Request body: Preset JSON without ``id`` and ``created_at`` (both are
+    auto-assigned by the server).  Built-in flag is always forced to False.
+    """
+    try:
+        saved = presets_module.save_preset(body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(saved, status_code=201)
+
+
+@app.delete("/api/presets/{preset_id}", status_code=204)
+async def delete_preset_endpoint(preset_id: str):
+    """Delete a user preset. Returns 400 for built-in presets, 404 if not found."""
+    try:
+        presets_module.delete_preset(preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # POST /api/jobs  — create and start a new pipeline job
 # ---------------------------------------------------------------------------
 
@@ -90,15 +128,16 @@ async def health() -> dict:
 async def create_job(
     audio_file: UploadFile,
     lyrics: str = Form(...),
+    preset_json: str = Form(...),
     translation_model: str = Form("gemma"),
     cover_model: str = Form("ace1"),
-    mode: str = Form("lego"),
-    seed: int = Form(42),
-    strength: float = Form(0.28),
-    candidates: int = Form(8),
-    scoring: str = Form("whisper"),
-    threshold: float = Form(0.4),
 ) -> JSONResponse:
+    # ---- Validate preset ----
+    try:
+        preset = Preset(**json.loads(preset_json))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid preset_json: {exc}")
+
     # ---- Validate lyrics ----
     if not lyrics.strip():
         raise HTTPException(status_code=400, detail="lyrics is empty")
@@ -132,8 +171,10 @@ async def create_job(
     audio_path.write_bytes(content)
 
     logger.info(
-        "[job %s] POST /api/jobs accepted — audio=%s (%d bytes), t_model=%s, c_model=%s, lyrics=%d chars",
-        job_id, audio_file.filename, len(content), translation_model, cover_model, len(lyrics),
+        "[job %s] POST /api/jobs accepted — audio=%s (%d bytes), t_model=%s, c_model=%s, "
+        "preset=%s, post_fx=%s, lyrics=%d chars",
+        job_id, audio_file.filename, len(content), translation_model, cover_model,
+        preset.id, preset.post_fx_enabled, len(lyrics),
     )
 
     jobs_module.start_pipeline(
@@ -142,6 +183,7 @@ async def create_job(
         lyrics=lyrics,
         dpo_model_path=DPO_MODEL,
         cache_root=CACHE_ROOT,
+        preset=preset,
     )
 
     return JSONResponse({"job_id": job_id}, status_code=201)

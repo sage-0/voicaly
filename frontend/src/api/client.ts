@@ -1,4 +1,4 @@
-import type { GenConfig, JobResult } from '../types';
+import type { GenConfig, JobResult, Preset } from '../types';
 
 export async function createJob(config: GenConfig, audioFile: File): Promise<string> {
   const form = new FormData();
@@ -12,6 +12,7 @@ export async function createJob(config: GenConfig, audioFile: File): Promise<str
   form.append('candidates', String(config.params.candidates));
   form.append('scoring', config.params.scoring);
   form.append('threshold', String(config.params.threshold));
+  form.append('preset_json', JSON.stringify(config.preset));
 
   console.info('[API] POST /api/jobs', {
     audio: audioFile.name,
@@ -41,4 +42,26 @@ export async function getJobResult(jobId: string): Promise<JobResult> {
     throw new Error(`Failed to fetch result: ${res.status} ${body || ''}`.trim());
   }
   return res.json();
+}
+
+export async function listPresets(): Promise<Preset[]> {
+  const res = await fetch('/api/presets');
+  if (!res.ok) throw new Error('Failed to load presets');
+  const data = await res.json();
+  return data.presets;
+}
+
+export async function savePreset(preset: Omit<Preset, 'id' | 'created_at' | 'builtin'>): Promise<Preset> {
+  const res = await fetch('/api/presets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(preset),
+  });
+  if (!res.ok) throw new Error('Failed to save preset');
+  return res.json();
+}
+
+export async function deletePreset(presetId: string): Promise<void> {
+  const res = await fetch(`/api/presets/${presetId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete preset');
 }

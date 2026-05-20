@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { JobResult, GenConfig, Candidate } from '../types';
+import { savePreset } from '../api/client';
 import { Player, type PlayerHandle } from '../components/Player';
 import { SectionLabel } from '../components/SectionLabel';
 import { buildTranslationMarkdown, downloadTextFile, suggestedFilename } from '../utils/export';
@@ -41,6 +42,7 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
   const [playing, setPlaying] = useState(false);
   const [activeTab, setActiveTab] = useState<'translation' | 'details'>('translation');
   const playerRef = useRef<PlayerHandle>(null);
+  const [savingPreset, setSavingPreset] = useState(false);
 
   const best = selectedCand;
 
@@ -59,6 +61,26 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
     const filename = suggestedFilename(config.audioFile?.name, 'md');
     console.info('[Results] downloading translation →', filename);
     downloadTextFile(md, filename, 'text/markdown');
+  };
+
+  const onSavePreset = async () => {
+    const name = window.prompt('Preset name:', config.preset?.name ?? 'My Preset');
+    if (!name) return;
+    setSavingPreset(true);
+    try {
+      await savePreset({
+        name,
+        candidates: config.preset?.candidates ?? [],
+        post_fx_enabled: config.preset?.post_fx_enabled ?? false,
+        post_fx_consonant_boost_db: config.preset?.post_fx_consonant_boost_db ?? 0,
+        post_fx_breath_level_db: config.preset?.post_fx_breath_level_db ?? 0,
+      });
+      alert('Saved');
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to save preset');
+    } finally {
+      setSavingPreset(false);
+    }
   };
 
   // Click a lyric line → jump to a proportional position in the audio.
@@ -103,7 +125,6 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
           label={`Rank #${best.rank} · ${best.tag}`}
           playing={playing}
           onToggle={() => setPlaying(p => !p)}
-          seed={best.seed}
           accent="var(--accent)"
           audioUrl={best.audio_url || undefined}
         />
@@ -210,38 +231,77 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
               ))}
             </div>
 
-            <button
-              onClick={onDownloadTranslation}
-              title="翻訳結果と設定パラメータを Markdown でダウンロード"
-              style={{
-                marginBottom: 6,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 12px',
-                fontSize: 12,
-                fontWeight: 500,
-                color: 'var(--t2)',
-                background: 'var(--s2)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                cursor: 'pointer',
-                transition: 'all .15s',
-              }}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--text)';
-                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-hi)';
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLElement).style.color = 'var(--t2)';
-                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              Export .md
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <button
+                onClick={onDownloadTranslation}
+                title="翻訳結果と設定パラメータを Markdown でダウンロード"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: 'var(--t2)',
+                  background: 'var(--s2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  transition: 'all .15s',
+                }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLElement).style.color = 'var(--text)';
+                  (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-hi)';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLElement).style.color = 'var(--t2)';
+                  (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                Export .md
+              </button>
+
+              <button
+                onClick={onSavePreset}
+                disabled={savingPreset}
+                title="現在のプリセット設定を保存する"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: savingPreset ? 'var(--t3)' : 'var(--teal)',
+                  background: 'var(--s2)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  cursor: savingPreset ? 'not-allowed' : 'pointer',
+                  transition: 'all .15s',
+                  opacity: savingPreset ? 0.6 : 1,
+                }}
+                onMouseEnter={e => {
+                  if (!savingPreset) {
+                    (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
+                    (e.currentTarget as HTMLElement).style.background = 'var(--teal-s)';
+                  }
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+                  (e.currentTarget as HTMLElement).style.background = 'var(--s2)';
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" />
+                  <polyline points="7 3 7 8 15 8" />
+                </svg>
+                {savingPreset ? 'Saving...' : 'Save as Preset'}
+              </button>
+            </div>
           </div>
 
           {activeTab === 'translation' ? (

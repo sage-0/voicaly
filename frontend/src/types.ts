@@ -5,6 +5,24 @@ export type CoverModel = 'ace1';
 export type Phase = 'input' | 'processing' | 'results';
 export type ScoringMode = 'whisper' | 'ear' | 'both';
 
+export interface PresetCandidate {
+  mode: string;       // "lego"
+  seed: number;
+  strength: number;   // 0.0-1.0
+  vocal_db: number;   // 0, -6, -12 etc
+}
+
+export interface Preset {
+  id: string;
+  name: string;
+  builtin: boolean;
+  created_at: string;
+  candidates: PresetCandidate[];
+  post_fx_enabled: boolean;
+  post_fx_consonant_boost_db: number;
+  post_fx_breath_level_db: number;
+}
+
 export interface TranslationRow {
   id: number;
   ja: string;
@@ -44,6 +62,13 @@ export interface GenConfig {
   cModel: CoverModel;
   params: GenParams;
   audioFile: File;
+  preset: Preset;
+}
+
+export interface LogEvent {
+  text: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  ts: number; // unix timestamp (seconds)
 }
 
 export interface SSEEvent {
@@ -52,6 +77,7 @@ export interface SSEEvent {
     | 'translation_ready'
     | 'translation_line'
     | 'candidate_progress'
+    | 'log'
     | 'done'
     | 'error';
   stage?: string;
@@ -63,4 +89,8 @@ export interface SSEEvent {
   row?: TranslationRow;
   done?: number;
   total?: number;
+  /** Log event fields (type === 'log'). */
+  text?: string;
+  level?: LogEvent['level'];
+  ts?: number;
 }

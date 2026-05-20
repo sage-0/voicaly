@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import type { GenConfig, JobResult, TranslationRow, SSEEvent } from '../types';
+import type { GenConfig, JobResult, LogEvent, TranslationRow, SSEEvent } from '../types';
 import { useJobStream } from '../hooks/useJobStream';
 import { getJobResult } from '../api/client';
+import { LogConsole } from '../components/LogConsole';
 import { Waveform } from '../components/Waveform';
 
 interface ProcessingPhaseProps {
@@ -90,6 +91,7 @@ export function ProcessingPhase({ config, jobId, onComplete, onReset }: Processi
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [notes, setNotes] = useState<{ id: number; note: string; left: number }[]>([]);
   const noteIdRef = useRef(0);
+  const [logs, setLogs] = useState<LogEvent[]>([]);
 
   // ── Floating notes while translation is running ───────────────────────────
   useEffect(() => {
@@ -127,6 +129,18 @@ export function ProcessingPhase({ config, jobId, onComplete, onReset }: Processi
   // ── Stream consumer ───────────────────────────────────────────────────────
   useJobStream(jobId, (e: SSEEvent) => {
     console.info('[SSE]', e.type, e);
+
+    if (e.type === 'log') {
+      setLogs(prev => [
+        ...prev,
+        {
+          text: e.text ?? '',
+          level: e.level ?? 'info',
+          ts: e.ts ?? Date.now() / 1000,
+        } satisfies LogEvent,
+      ]);
+      return;
+    }
 
     if (e.type === 'progress') {
       if (typeof e.pct === 'number') setPct(e.pct * 100);
@@ -425,6 +439,9 @@ export function ProcessingPhase({ config, jobId, onComplete, onReset }: Processi
           </div>
         </div>
       )}
+
+      {/* Log console */}
+      <LogConsole logs={logs} />
 
       {/* Config summary */}
       <div

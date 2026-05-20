@@ -52,21 +52,24 @@ ACE_LEGO_CONFIG = "acestep-v15-turbo"
 ACE_LEGO_STEPS = 16
 
 # Candidate sweep centred on the FINAL_v6dB.wav conditions
-# (2B turbo, seed=42, str=0.45). Sweep covers ±0.05 around the anchor.
-# Alternative seeds at str=0.45 act as a safety net for reproducibility.
+# (2B turbo, seed=42, str=0.45).
+# 4-tuple: (mode, seed, strength, vocal_db)
+#   vocal_db: src_audio に渡す日本語ボーカルの減衰量 (dB)。
+#   0 = フル音源 (FINAL_v6dB と同条件), -6 = 半分の音量, -12 = 1/4 音量。
 ACE_CANDIDATES = [
-    # ★ FINAL_v6dB.wav の生成条件（2B turbo + str=0.45）
-    ("lego", 42, 0.45),
-    ("lego", 42, 0.40),
-    ("lego", 42, 0.50),
-    ("lego", 42, 0.42),
-    ("lego", 42, 0.48),
-    # 別 seed でも同じ strength 帯を sweep（再現不可問題に対する安全網）
-    ("lego", 777, 0.45),
-    ("lego", 2718, 0.45),
-    ("lego", 99, 0.45),
-    ("lego", 31415, 0.45),
-    ("lego", 1234, 0.45),
+    # ★ FINAL_v6dB.wav と同条件 (アンカー、再現性確保)
+    ("lego", 42, 0.45, 0),
+    # ボーカル抑制で音素漏洩を抑える sweep
+    ("lego", 42, 0.45, -6),
+    ("lego", 42, 0.45, -12),
+    ("lego", 42, 0.50, -6),
+    ("lego", 42, 0.50, -12),
+    ("lego", 42, 0.40, -6),
+    # 別 seed × 0.45 × vocal -6 (再現不可問題への安全網)
+    ("lego", 777, 0.45, -6),
+    ("lego", 2718, 0.45, -6),
+    ("lego", 99, 0.45, -12),
+    ("lego", 1234, 0.45, -6),
 ]
 
 # DPO 1-shot translation was user-preferred over rejection sampling (the
@@ -102,6 +105,33 @@ def _clean_meta(text: str) -> str:
 
 
 # ---------- stage functions -------------------------------------------
+
+
+def _build_attenuated_src(
+    full_audio: Path,
+    vocals: Path,
+    instrumental: Path,
+    out_path: Path,
+    vocal_db: float,
+) -> Path:
+    """日本語ボーカルを vocal_db だけ減衰させて instrumental と再合成した wav を作る。
+
+    vocal_db == 0 の場合は full_audio をそのまま out_path にコピーする (FINAL_v6dB と同条件)。
+    キャッシュ済み (out_path 存在時) は再生成しない。
+    """
+    if out_path.exists():
+        return out_path
+    if vocal_db == 0:
+        shutil.copy2(str(full_audio), str(out_path))
+        return out_path
+    from src.pipeline.mix import mix_tracks_with_vocal_compression
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    mix_tracks_with_vocal_compression(
+        vocals, instrumental, out_path,
+        vocal_gain_db=vocal_db, inst_gain_db=0,
+    )
+    return out_path
 
 
 def _stage_separate(audio_path: Path, out_dir: Path) -> tuple[Path, Path]:
@@ -244,22 +274,41 @@ def _whisper_lyric_score(
 
 def _stage_ace_generate(
     audio_path: Path,
+    vocals: Path,
+    instrumental: Path,
     translations: list[dict],
-    inst_orig: Path,
     out_dir: Path,
-) -> tuple[Path, str, list[dict]]:
-    """Run candidates, return ``(picked_final_wav, picked_tag, all_candidates)``.
+    *,
+    ace_candidates: list[tuple[str, int, float, int]] | None = None,
+    post_fx_enabled: bool = True,
+    post_fx_consonant_boost_db: float = 2.5,
+    post_fx_breath_level_db: float = -28.0,
+):
+    """Run candidates, yielding log events then a sentinel with the final result.
+
+    Yields tuples ``(stage, pct_or_none, payload)``:
+        ``("log", None, {"text": ..., "level": ...})`` — progress log lines
+        ``("__result__", None, (picked_final_wav, picked_tag, all_candidates))``
+            — final sentinel, must be captured by the caller
 
     ``all_candidates`` is a list of dicts ``{tag, final_wav, score, detail}``
     sorted by score (best first). The Gradio UI uses this list to surface
     every candidate to the user so they can pick by ear; the picked best is
     still copied to ``picked_final_wav`` for callers that want a single file.
+
+    ``vocals`` and ``instrumental`` are the Demucs-separated tracks from
+    ``audio_path``; ``instrumental`` doubles as ``inst_orig`` for the final mix.
     """
+    def _log(text: str, level: str = "info"):
+        return ("log", None, {"text": text, "level": level})
+
     final_out = out_dir / "final_picked.wav"
     manifest_path = out_dir / "candidates_manifest.json"
     if final_out.exists() and manifest_path.exists():
         manifest = json.loads(manifest_path.read_text("utf-8"))
-        return final_out, manifest[0]["tag"] if manifest else "cached", manifest
+        yield _log("ACE-Step results loaded from cache")
+        yield ("__result__", None, (final_out, manifest[0]["tag"] if manifest else "cached", manifest))
+        return
 
     os.environ.setdefault("ACESTEP_CHECKPOINTS_DIR", ACE_CKPT)
     # IMPORTANT: do *not* touch CUBLAS_WORKSPACE_CONFIG / cudnn flags.
@@ -274,9 +323,13 @@ def _stage_ace_generate(
     from acestep.inference import GenerationConfig, GenerationParams, generate_music
     from acestep.llm_inference import LLMHandler
 
+    candidates_used = ace_candidates if ace_candidates is not None else ACE_CANDIDATES
+    n = len(candidates_used)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     lyrics_block = "\n".join(r["english"] for r in translations if r.get("english"))
 
+    yield _log(f"Initializing ACE-Step DiT ({ACE_LEGO_CONFIG})...")
     dit = AceStepHandler()
     _, ok = dit.initialize_service(
         project_root=ACE_CKPT,
@@ -286,7 +339,9 @@ def _stage_ace_generate(
     )
     if not ok:
         raise RuntimeError("ACE-Step DiT init failed")
+    yield _log("ACE-Step DiT ready")
 
+    yield _log("Initializing ACE-Step LLM (acestep-5Hz-lm-1.7B)...")
     llm = LLMHandler()
     _, ok = llm.initialize(
         checkpoint_dir=ACE_CKPT,
@@ -298,6 +353,7 @@ def _stage_ace_generate(
     )
     if not ok:
         raise RuntimeError("ACE-Step LM init failed")
+    yield _log("ACE-Step LLM ready")
 
     target_words: set[str] = set()
     for r in translations:
@@ -312,7 +368,7 @@ def _stage_ace_generate(
     from src.pipeline.mix import mix_tracks
     from src.separation.demucs_runner import separate
 
-    scores: list[tuple[float, str, int, float, Path, str]] = []  # (score, mode, seed, strength, final_wav, detail)
+    scores: list[tuple[float, str, int, float, float, Path, str]] = []  # (score, mode, seed, strength, vocal_db, final_wav, detail)
 
     # ---- Warmup ------------------------------------------------------
     # Empirically, an M1-replica warmup (lego, seed=42, str=0.40) produced
@@ -324,6 +380,7 @@ def _stage_ace_generate(
     warmup_dir.mkdir(exist_ok=True)
     warmup_marker = warmup_dir / ".done"
     if not warmup_marker.exists():
+        yield _log("Running warmup pass (seed=987654) — this is discarded")
         try:
             warmup_params = GenerationParams(
                 task_type="lego",
@@ -341,25 +398,45 @@ def _stage_ace_generate(
             _ = generate_music(dit, llm, warmup_params, config, save_dir=str(warmup_dir))
         except Exception as e:
             print(f"  [best-of-N] warmup failed (continuing anyway): {e}")
+            yield _log(f"Warmup failed (continuing): {e}", level="warn")
         warmup_marker.touch()
         for f in warmup_dir.glob("*.wav"):
             try:
                 f.unlink()
             except Exception:
                 pass
+        yield _log("Warmup complete")
 
-    for mode, seed, strength in ACE_CANDIDATES:
+    # 候補ループの前に、必要な vocal_db レベルだけまとめて事前生成
+    attenuated_srcs: dict[float, Path] = {}
+    src_dir = out_dir / "attenuated_srcs_v2_compressor"
+    src_dir.mkdir(exist_ok=True)
+    unique_vocal_dbs = sorted({c[3] for c in candidates_used})
+    yield _log(f"Preparing attenuated src_audio for vocal_db levels: {unique_vocal_dbs}")
+    for vdb in unique_vocal_dbs:
+        if vdb == 0:
+            attenuated_srcs[vdb] = audio_path  # フル音源そのまま
+        else:
+            attenuated_srcs[vdb] = _build_attenuated_src(
+                audio_path, vocals, instrumental,
+                src_dir / f"src_voc{vdb:+d}db.wav", vdb,
+            )
+            yield _log(f"  src_voc{vdb:+d}db.wav ready")
+
+    for i, (mode, seed, strength, vocal_db) in enumerate(candidates_used):
         # Do not call torch.manual_seed / cuda.manual_seed_all here.
         # ACE-Step's GenerationParams(seed=...) flows into the internal
         # set_seeds() which uses its own torch.Generator instance —
         # external manual_seed only perturbs the global RNG state and
         # diverges output from variants3.py's behaviour.
 
+        tag = f"{mode}_seed{seed}_str{strength:.2f}_voc{vocal_db:+d}db"
+        src_audio_for_cand = str(attenuated_srcs[vocal_db])
         common_kwargs = dict(
             thinking=False,
             caption=ACE_LEGO_CAPTION,
             lyrics=lyrics_block,
-            src_audio=str(audio_path),
+            src_audio=src_audio_for_cand,
             audio_cover_strength=strength,
             vocal_language="en",
             inference_steps=ACE_LEGO_STEPS,
@@ -374,29 +451,37 @@ def _stage_ace_generate(
         else:
             params = GenerationParams(task_type="cover", **common_kwargs)
 
-        tag = f"{mode}_seed{seed}_str{strength:.2f}"
         per_dir = candidates_dir / tag
         per_dir.mkdir(exist_ok=True)
         cand_path = per_dir / "ace.wav"
 
+        yield _log(f"[{i+1}/{n}] Generating {tag} (seed={seed}, str={strength}, voc{vocal_db:+d}db)...")
+        t_cand = time.time()
         if not cand_path.exists():
             try:
                 result = generate_music(dit, llm, params, config, save_dir=str(per_dir))
             except Exception as e:
                 print(f"  [best-of-N] {tag} generation EXCEPTION: {e}")
+                yield _log(f"[{i+1}/{n}] {tag} generation EXCEPTION: {e}", level="error")
                 continue
             if not result.success or not result.audios:
                 print(f"  [best-of-N] {tag} FAILED: {result.error}")
+                yield _log(f"[{i+1}/{n}] {tag} FAILED: {result.error}", level="error")
                 continue
             shutil.move(str(result.audios[0]["path"]), str(cand_path))
+        dt_cand = time.time() - t_cand
+        yield _log(f"[{i+1}/{n}] {tag} done in {dt_cand:.1f}s")
 
         # Score on the candidate's vocals via Demucs + Whisper.
+        yield _log(f"[{i+1}/{n}] Demucs 2nd pass on candidate...")
         try:
             score, detail = _whisper_lyric_score(
                 cand_path, per_dir / "demucs_score", target_words
             )
+            yield _log(f"[{i+1}/{n}] Whisper scoring: word_overlap={score:.3f}")
         except Exception as e:
             print(f"  [best-of-N] {tag} score FAILED: {e}")
+            yield _log(f"[{i+1}/{n}] Whisper scoring FAILED: {e}", level="warn")
             score, detail = -1.0, str(e)
 
         # Build the candidate-specific final wav for ranking parity.
@@ -406,41 +491,59 @@ def _stage_ace_generate(
                 # Re-Demucs to isolate vocals, then mix with original inst.
                 demucs_dir = per_dir / "demucs_mix"
                 demucs_out = separate(cand_path, demucs_dir)
-                mix_tracks(demucs_out["vocals"], inst_orig, final_path)
+                if post_fx_enabled:
+                    from src.pipeline.post_fx import process_vocal
+                    processed_vocal = per_dir / "vocal_postfx.wav"
+                    process_vocal(
+                        demucs_out["vocals"], processed_vocal,
+                        consonant_boost_db=post_fx_consonant_boost_db,
+                        breath_level_db=post_fx_breath_level_db,
+                    )
+                    yield _log(
+                        f"[{i+1}/{n}] post_fx: consonant_boost={post_fx_consonant_boost_db}dB,"
+                        f" breath_level={post_fx_breath_level_db}dBFS"
+                    )
+                    mix_tracks(processed_vocal, instrumental, final_path)
+                else:
+                    mix_tracks(demucs_out["vocals"], instrumental, final_path)
             else:
                 # Cover already contains its own instrumental; use as-is.
                 shutil.copy2(str(cand_path), str(final_path))
         except Exception as e:
             print(f"  [best-of-N] {tag} mixing FAILED: {e}")
+            yield _log(f"[{i+1}/{n}] mixing FAILED: {e}", level="error")
             continue
 
-        print(f"  [best-of-N] {tag:38s}  word_overlap={score:.3f}  {detail}")
-        scores.append((score, mode, seed, strength, final_path, detail))
+        yield _log(f"[{i+1}/{n}] Final mix written to {final_path.name}")
+        print(f"  [best-of-N] {tag:48s}  word_overlap={score:.3f}  {detail}")
+        scores.append((score, mode, seed, strength, vocal_db, final_path, detail))
 
     if not scores:
         raise RuntimeError("ACE-Step produced no candidates")
     scores.sort(key=lambda t: t[0], reverse=True)
-    best_score, best_mode, best_seed, best_strength, best_path, _ = scores[0]
-    best_tag = f"{best_mode}_seed{best_seed}_str{best_strength:.2f}"
+    best_score, best_mode, best_seed, best_strength, best_vocal_db, best_path, _ = scores[0]
+    best_tag = f"{best_mode}_seed{best_seed}_str{best_strength:.2f}_voc{best_vocal_db:+d}db"
     print(f"  [best-of-N] PICKED {best_tag} word_overlap={best_score:.3f}")
+    yield _log(f"PICKED: {best_tag} (score={best_score:.3f})")
     shutil.copy2(str(best_path), str(final_out))
 
     # Build the manifest of every successful candidate so the UI can show
     # the full list and let the user pick by ear.
     manifest = [
         {
-            "tag": f"{mode}_seed{seed}_str{strength:.2f}",
+            "tag": f"{mode}_seed{seed}_str{strength:.2f}_voc{vocal_db:+d}db",
             "mode": mode,
             "seed": int(seed),
             "strength": float(strength),
+            "vocal_db": int(vocal_db),
             "score": float(score),
             "final_wav": str(final_path),
             "detail": detail,
         }
-        for score, mode, seed, strength, final_path, detail in scores
+        for score, mode, seed, strength, vocal_db, final_path, detail in scores
     ]
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), "utf-8")
-    return final_out, best_tag, manifest
+    yield ("__result__", None, (final_out, best_tag, manifest))
 
 
 def _stage_extract_vocals(ace_wav: Path, out_dir: Path) -> Path:
@@ -476,26 +579,71 @@ def run(
     lyrics_text: str,
     cache_root: Path = Path("cache"),
     dpo_model_path: str = DEFAULT_DPO_MODEL,
+    *,
+    ace_candidates: list[tuple[str, int, float, int]] | None = None,
+    post_fx_enabled: bool = True,
+    post_fx_consonant_boost_db: float = 2.5,
+    post_fx_breath_level_db: float = -28.0,
 ) -> Iterator[tuple[str, float, dict]]:
-    """Drive the full pipeline, yielding ``(stage, pct, payload)`` events."""
+    """Drive the full pipeline, yielding ``(stage, pct, payload)`` events.
+
+    Parameters
+    ----------
+    ace_candidates:
+        Override the module-level ACE_CANDIDATES sweep.  Each element is a
+        4-tuple ``(mode, seed, strength, vocal_db)``.  Pass ``None`` to use
+        the module-level default (backward compat).
+    post_fx_enabled:
+        When True the post-FX chain (consonant enhancer + breath insertion)
+        is applied to the vocal track before the final mix.
+    post_fx_consonant_boost_db / post_fx_breath_level_db:
+        Control parameters forwarded to ``process_vocal``.
+    """
+    def _log(text: str, level: str = "info"):
+        return ("log", None, {"text": text, "level": level})
+
     audio_path = Path(audio_path)
     if not audio_path.exists():
         raise FileNotFoundError(audio_path)
 
+    candidates_used = ace_candidates if ace_candidates is not None else ACE_CANDIDATES
+
     audio_key = _hash_audio(audio_path)
     lyrics_key = _hash_text(lyrics_text)
-    # ACE-Step config and strength are baked into the lyrics-level cache key
-    # so that changing ACE_LEGO_CONFIG or ACE_LEGO_STRENGTH automatically
-    # invalidates old ACE-Step results (Demucs/translation caches are reused).
-    ace_key = _hash_text(f"{ACE_LEGO_CONFIG}:{ACE_LEGO_STRENGTH}")
+    # ACE-Step config and candidate sweep are baked into the lyrics-level cache
+    # key so that changing ACE_LEGO_CONFIG, ACE_LEGO_STRENGTH, or the preset
+    # automatically invalidates old ACE-Step results (Demucs/translation caches
+    # are reused across presets that share the same audio+lyrics).
+    postfx_tag = (
+        f"postfx_v1_on_cb{post_fx_consonant_boost_db}_bl{post_fx_breath_level_db}"
+        if post_fx_enabled else "postfx_off"
+    )
+    ace_key = _hash_text(
+        f"{ACE_LEGO_CONFIG}:{ACE_LEGO_STRENGTH}:voc_compressor_v1:{postfx_tag}:"
+        + ",".join(f"{c[0]}-{c[1]}-{c[2]:.2f}-{c[3]:+d}" for c in candidates_used)
+    )
     audio_cache = cache_root / audio_key
     lyrics_cache = audio_cache / f"{lyrics_key}_{ace_key}"
     audio_cache.mkdir(parents=True, exist_ok=True)
     lyrics_cache.mkdir(parents=True, exist_ok=True)
 
+    yield _log(
+        f"Job started — audio={audio_path.name}, lyrics={len(lyrics_text)} chars"
+    )
+    yield _log(f"Cache key: lyrics_cache={lyrics_cache.name}")
+    yield _log(
+        f"Preset: candidates={len(candidates_used)}, post_fx={post_fx_enabled}"
+    )
+
     yield ("separate", 0.05, {"msg": "Separating vocals and instrumental..."})
+    yield _log("Demucs 1st pass: separating vocals and instrumental...")
     t0 = time.time()
-    _, inst_orig = _stage_separate(audio_path, audio_cache)
+    vocals, inst_orig = _stage_separate(audio_path, audio_cache)
+    vocals_size = vocals.stat().st_size if vocals.exists() else 0
+    inst_size = inst_orig.stat().st_size if inst_orig.exists() else 0
+    yield _log(
+        f"Demucs done: vocals.wav ({vocals_size} bytes), instrumental.wav ({inst_size} bytes)"
+    )
     yield (
         "separate",
         0.15,
@@ -503,18 +651,26 @@ def run(
     )
 
     yield ("translate", 0.20, {"msg": "Translating lyrics with DPO Gemma..."})
+    yield _log(f"Loading DPO Gemma model from {dpo_model_path}...")
     t0 = time.time()
     translations: list[dict] = []
+    _translate_model_logged = False
     for ev_type, payload in _stage_translate(
         lyrics_text, dpo_model_path, lyrics_cache / "translation.json"
     ):
         if ev_type == "line":
+            if not _translate_model_logged:
+                # First line means model has loaded and started generating
+                jp_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
+                yield _log(f"DPO model loaded. Translating {len(jp_lines)} Japanese lines...")
+                _translate_model_logged = True
             # Reserve 0.20–0.55 for translation; allocate proportionally per line.
             line_pct = 0.20 + 0.35 * (payload["idx"] + 1) / max(payload["total"], 1)
             yield ("translate_line", line_pct, payload)
         elif ev_type == "result":
             translations = payload
 
+    yield _log("Translation complete")
     yield (
         "translate",
         0.55,
@@ -531,11 +687,46 @@ def run(
         {"msg": "Generating ACE-Step lego + cover candidates and picking by Whisper..."},
     )
     t0 = time.time()
-    picked_final, picked_tag, candidates = _stage_ace_generate(
-        audio_path, translations, inst_orig, lyrics_cache
-    )
+
+    # _stage_ace_generate is now a generator. Drain it, forwarding log events
+    # and capturing the final __result__ sentinel.
+    picked_final: Path | None = None
+    picked_tag: str = ""
+    candidates: list[dict] = []
+    n_cands = len(candidates_used)
+    cand_done = 0
+
+    for stage_ev, pct_ev, payload_ev in _stage_ace_generate(
+        audio_path, vocals, inst_orig, translations, lyrics_cache,
+        ace_candidates=ace_candidates,
+        post_fx_enabled=post_fx_enabled,
+        post_fx_consonant_boost_db=post_fx_consonant_boost_db,
+        post_fx_breath_level_db=post_fx_breath_level_db,
+    ):
+        if stage_ev == "__result__":
+            # Sentinel: unpack and stop iterating
+            picked_final, picked_tag, candidates = payload_ev
+            break
+        elif stage_ev == "log":
+            # Forward log event as-is; also emit candidate_progress when we
+            # detect the per-candidate "done in Xs" lines so the UI grid ticks.
+            yield (stage_ev, pct_ev, payload_ev)
+            text = payload_ev.get("text", "")
+            if "] " in text and "done in " in text:
+                cand_done += 1
+                ace_pct = 0.60 + 0.35 * cand_done / max(n_cands, 1)
+                yield ("candidate_progress", ace_pct, {"done": cand_done, "total": n_cands})
+        else:
+            yield (stage_ev, pct_ev, payload_ev)
+
+    if picked_final is None:
+        raise RuntimeError("ACE-Step generator did not yield __result__ sentinel")
+
     final = lyrics_cache / "final.wav"
     shutil.copy2(str(picked_final), str(final))
+    total_dt = time.time() - t0
+    yield _log(f"Final pipeline output: {final.name} ({final.stat().st_size} bytes)")
+    yield _log(f"Total time: {total_dt:.1f}s")
     yield (
         "done",
         1.0,
@@ -544,6 +735,6 @@ def run(
             "translations": translations,
             "picked": picked_tag,
             "candidates": candidates,
-            "elapsed": round(time.time() - t0, 1),
+            "elapsed": round(total_dt, 1),
         },
     )

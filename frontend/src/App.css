@@ -75,3 +75,67 @@ html, body, #root {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
+
+/* ── LogConsole ─────────────────────────────────────────────────────────── */
+.log-console {
+  margin-top: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--s1, #1a1a1a);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+}
+.log-console-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--t2);
+  font-weight: 500;
+}
+.log-console-body {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+.log-line {
+  display: flex;
+  gap: 8px;
+  padding: 1px 0;
+  line-height: 1.4;
+}
+.log-ts {
+  color: var(--t3);
+  flex-shrink: 0;
+}
+.log-text {
+  color: var(--t1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-info  .log-text { color: var(--text); }
+.log-warn  .log-text { color: #e0a040; }
+.log-error .log-text { color: #e05050; }
+.log-debug .log-text { color: var(--t3); }
+
+.param-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--s3);
+  color: var(--t3);
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 5px;
+  cursor: help;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  transition: background .15s, color .15s;
+  vertical-align: middle;
+}
+
+.param-help:hover {
+  background: var(--border-hi);
+  color: var(--t2);
+}

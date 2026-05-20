@@ -60,7 +60,7 @@ def _handle_pipeline_event(
     job_id: str,
     q: Queue,
     stage: str,
-    pct: float,
+    pct: float | None,
     payload: dict,
     translations_cache: list[dict],
 ) -> list[dict]:
@@ -70,6 +70,16 @@ def _handle_pipeline_event(
     """
     job = _jobs[job_id]
     msg = payload.get("msg", "")
+
+    # ---- log events (no progress bar update) ----
+    if stage == "log":
+        q.put({
+            "type": "log",
+            "text": payload.get("text", ""),
+            "level": payload.get("level", "info"),
+            "ts": time.time(),
+        })
+        return translations_cache
 
     if stage == "translate_line":
         # Per-line streaming event from DPO Gemma. Convert to the row shape
@@ -93,12 +103,20 @@ def _handle_pipeline_event(
         logger.info("[job %s] translation_ready (%d rows)", job_id, len(rows))
         q.put({"type": "translation_ready", "rows": rows})
 
-    q.put({
-        "type": "progress",
-        "stage": stage,
-        "pct": pct,
-        "message": msg or f"{stage} {int(pct * 100)}%",
-    })
+    if stage == "candidate_progress":
+        q.put({
+            "type": "candidate_progress",
+            "done": payload.get("done", 0),
+            "total": payload.get("total", 0),
+        })
+
+    if pct is not None:
+        q.put({
+            "type": "progress",
+            "stage": stage,
+            "pct": pct,
+            "message": msg or f"{stage} {int(pct * 100)}%",
+        })
 
     if stage == "done":
         candidates = payload.get("candidates", [])
@@ -151,8 +169,15 @@ def start_pipeline(
     lyrics: str,
     dpo_model_path: str,
     cache_root: Path,
+    preset: "Any | None" = None,
 ) -> None:
-    """Launch the pipeline in a background daemon thread, pushing events to the job queue."""
+    """Launch the pipeline in a background daemon thread, pushing events to the job queue.
+
+    ``preset`` is an optional ``src.api.presets.Preset`` instance.  When
+    supplied, its candidates and post-FX settings are forwarded to the
+    orchestrator.  When omitted the orchestrator falls back to its own
+    module-level defaults (ACE_CANDIDATES, post_fx_enabled=True).
+    """
 
     def _run() -> None:
         job = _jobs[job_id]
@@ -191,10 +216,27 @@ def start_pipeline(
             job_cache_root = cache_root / job_id
             logger.info("[job %s] cache dir: %s (isolated, no cross-job reuse)", job_id, job_cache_root)
 
+            # Build orchestrator kwargs from preset when available
+            orch_kwargs: dict = {}
+            if preset is not None:
+                ace_candidates = [
+                    (c.mode, c.seed, c.strength, c.vocal_db)
+                    for c in preset.candidates
+                ]
+                orch_kwargs["ace_candidates"] = ace_candidates
+                orch_kwargs["post_fx_enabled"] = preset.post_fx_enabled
+                orch_kwargs["post_fx_consonant_boost_db"] = preset.post_fx_consonant_boost_db
+                orch_kwargs["post_fx_breath_level_db"] = preset.post_fx_breath_level_db
+                logger.info(
+                    "[job %s] preset=%s post_fx=%s candidates=%d",
+                    job_id, preset.id, preset.post_fx_enabled, len(ace_candidates),
+                )
+
             with _pipeline_lock:
                 logger.info("[job %s] acquired pipeline lock, running orchestrator", job_id)
                 for stage, pct, payload in orchestrator_run(
-                    audio_path, lyrics, job_cache_root, dpo_model_path
+                    audio_path, lyrics, job_cache_root, dpo_model_path,
+                    **orch_kwargs,
                 ):
                     translations_cache = _handle_pipeline_event(
                         job_id, q, stage, pct, payload, translations_cache
