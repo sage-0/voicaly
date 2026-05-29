@@ -227,9 +227,30 @@ def start_pipeline(
                 orch_kwargs["post_fx_enabled"] = preset.post_fx_enabled
                 orch_kwargs["post_fx_consonant_boost_db"] = preset.post_fx_consonant_boost_db
                 orch_kwargs["post_fx_breath_level_db"] = preset.post_fx_breath_level_db
+
+                # Forward the preset's ACE-Step model + sampler overrides.
+                # CAPTION_STYLES lookup turns the preset's caption_style key
+                # into the actual caption string the orchestrator passes to
+                # GenerationParams.
+                from src.api.presets import CAPTION_STYLES
+                caption_override = CAPTION_STYLES.get(preset.caption_style)
+                orch_kwargs["ace_config"] = preset.ace_config
+                orch_kwargs["inference_steps"] = preset.inference_steps
+                orch_kwargs["shift"] = preset.shift
+                orch_kwargs["cfg_interval_start"] = preset.cfg_interval_start
+                orch_kwargs["cfg_interval_end"] = preset.cfg_interval_end
+                orch_kwargs["guidance_scale"] = preset.guidance_scale
+                orch_kwargs["caption_override"] = caption_override
+                orch_kwargs["src_kind"] = preset.src_kind
+
                 logger.info(
-                    "[job %s] preset=%s post_fx=%s candidates=%d",
+                    "[job %s] preset=%s post_fx=%s candidates=%d "
+                    "ace_config=%s steps=%d shift=%.1f cfg=[%.1f,%.1f] g=%.1f "
+                    "caption=%s src_kind=%s",
                     job_id, preset.id, preset.post_fx_enabled, len(ace_candidates),
+                    preset.ace_config, preset.inference_steps, preset.shift,
+                    preset.cfg_interval_start, preset.cfg_interval_end,
+                    preset.guidance_scale, preset.caption_style, preset.src_kind,
                 )
 
             with _pipeline_lock:

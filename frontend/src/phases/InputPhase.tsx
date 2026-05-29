@@ -192,7 +192,8 @@ export function InputPhase({ onGenerate }: InputPhaseProps) {
               </span>
               <span
                 className="param-help"
-                title="ACE-Step に渡す候補リストと後処理設定の組合せ。各プリセットはこの後の項目で内容を確認・編集できます"
+                data-tooltip="ACE-Step に渡すモデル・サンプラー設定・候補リスト・後処理設定の組合せ。曲のジャンルや品質要件に応じて切り替えます。各プリセットの内容は下の Edit Preset で確認・編集できます"
+                title="ACE-Step に渡すモデル・サンプラー設定・候補リスト・後処理設定の組合せ。曲のジャンルや品質要件に応じて切り替えます"
               >?</span>
             </div>
             <select

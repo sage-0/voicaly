@@ -283,6 +283,17 @@ def _stage_ace_generate(
     post_fx_enabled: bool = True,
     post_fx_consonant_boost_db: float = 2.5,
     post_fx_breath_level_db: float = -28.0,
+    # ACE-Step model + sampler overrides (added 2026-05-29).
+    # Default values reproduce the historical FINAL_v6dB behaviour, so callers
+    # that don't pass these get the same output as before this refactor.
+    ace_config: str | None = None,
+    inference_steps: int | None = None,
+    shift: float = 1.0,
+    cfg_interval_start: float = 0.0,
+    cfg_interval_end: float = 1.0,
+    guidance_scale: float = 7.0,
+    caption_override: str | None = None,
+    src_kind: str = "full",
 ):
     """Run candidates, yielding log events then a sentinel with the final result.
 
@@ -326,24 +337,29 @@ def _stage_ace_generate(
     candidates_used = ace_candidates if ace_candidates is not None else ACE_CANDIDATES
     n = len(candidates_used)
 
+    # Resolve preset-controlled knobs (None → fall back to module defaults).
+    effective_ace_config = ace_config or ACE_LEGO_CONFIG
+    effective_steps = inference_steps if inference_steps is not None else ACE_LEGO_STEPS
+    effective_caption = caption_override if caption_override is not None else ACE_LEGO_CAPTION
+
     out_dir.mkdir(parents=True, exist_ok=True)
     lyrics_block = "\n".join(r["english"] for r in translations if r.get("english"))
 
-    yield _log(f"Initializing ACE-Step DiT ({ACE_LEGO_CONFIG})...")
+    yield _log(f"Initializing ACE-Step DiT ({effective_ace_config})...")
     dit = AceStepHandler()
-    _, ok = dit.initialize_service(
+    dit_status, ok = dit.initialize_service(
         project_root=ACE_CKPT,
-        config_path=ACE_LEGO_CONFIG,
+        config_path=effective_ace_config,
         device="auto",
         offload_to_cpu=False,
     )
     if not ok:
-        raise RuntimeError("ACE-Step DiT init failed")
+        raise RuntimeError(f"ACE-Step DiT init failed: {dit_status}")
     yield _log("ACE-Step DiT ready")
 
     yield _log("Initializing ACE-Step LLM (acestep-5Hz-lm-1.7B)...")
     llm = LLMHandler()
-    _, ok = llm.initialize(
+    llm_status, ok = llm.initialize(
         checkpoint_dir=ACE_CKPT,
         lm_model_path="acestep-5Hz-lm-1.7B",
         backend="pt",
@@ -352,7 +368,7 @@ def _stage_ace_generate(
         dtype=None,
     )
     if not ok:
-        raise RuntimeError("ACE-Step LM init failed")
+        raise RuntimeError(f"ACE-Step LM init failed: {llm_status}")
     yield _log("ACE-Step LLM ready")
 
     target_words: set[str] = set()
@@ -431,16 +447,27 @@ def _stage_ace_generate(
         # diverges output from variants3.py's behaviour.
 
         tag = f"{mode}_seed{seed}_str{strength:.2f}_voc{vocal_db:+d}db"
-        src_audio_for_cand = str(attenuated_srcs[vocal_db])
+        # src_kind="vocals" overrides the attenuation path entirely — the
+        # Demucs-separated vocal stem is fed directly to ACE-Step. This is the
+        # OOD-song preset, where the full mix's instrumental was masking the
+        # melody signal the LM needs.
+        if src_kind == "vocals":
+            src_audio_for_cand = str(vocals)
+        else:
+            src_audio_for_cand = str(attenuated_srcs[vocal_db])
         common_kwargs = dict(
             thinking=False,
-            caption=ACE_LEGO_CAPTION,
+            caption=effective_caption,
             lyrics=lyrics_block,
             src_audio=src_audio_for_cand,
             audio_cover_strength=strength,
             vocal_language="en",
-            inference_steps=ACE_LEGO_STEPS,
+            inference_steps=effective_steps,
             seed=seed,
+            shift=shift,
+            cfg_interval_start=cfg_interval_start,
+            cfg_interval_end=cfg_interval_end,
+            guidance_scale=guidance_scale,
         )
         if mode == "lego":
             params = GenerationParams(
@@ -584,6 +611,16 @@ def run(
     post_fx_enabled: bool = True,
     post_fx_consonant_boost_db: float = 2.5,
     post_fx_breath_level_db: float = -28.0,
+    # ACE-Step model + sampler overrides (added 2026-05-29 — supplied by the
+    # preset system). None / defaults keep the legacy FINAL_v6dB behaviour.
+    ace_config: str | None = None,
+    inference_steps: int | None = None,
+    shift: float = 1.0,
+    cfg_interval_start: float = 0.0,
+    cfg_interval_end: float = 1.0,
+    guidance_scale: float = 7.0,
+    caption_override: str | None = None,
+    src_kind: str = "full",
 ) -> Iterator[tuple[str, float, dict]]:
     """Drive the full pipeline, yielding ``(stage, pct, payload)`` events.
 
@@ -598,6 +635,18 @@ def run(
         is applied to the vocal track before the final mix.
     post_fx_consonant_boost_db / post_fx_breath_level_db:
         Control parameters forwarded to ``process_vocal``.
+    ace_config:
+        ACE-Step config_path (e.g. "acestep-v15-turbo", "acestep-v15-xl-turbo",
+        "acestep-v15-sft"). None → fall back to module ACE_LEGO_CONFIG.
+    inference_steps, shift, cfg_interval_start, cfg_interval_end,
+    guidance_scale, caption_override:
+        Sampler overrides for ACE-Step. None / defaults reproduce the
+        historical FINAL_v6dB behaviour (steps=16, shift=1.0, cfg=[0,1],
+        guidance=7.0, caption=ACE_LEGO_CAPTION).
+    src_kind:
+        "full" feeds the full mix as src_audio (legacy). "vocals" feeds the
+        Demucs-separated vocal stem directly — used by the OOD preset to
+        force the LM to lock onto the original melody.
     """
     def _log(text: str, level: str = "info"):
         return ("log", None, {"text": text, "level": level})
@@ -618,8 +667,20 @@ def run(
         f"postfx_v1_on_cb{post_fx_consonant_boost_db}_bl{post_fx_breath_level_db}"
         if post_fx_enabled else "postfx_off"
     )
+    # The preset-controlled sampler knobs (model, steps, shift, cfg, guidance,
+    # caption, src_kind) all flow into the cache key so that two presets with
+    # the same candidate sweep but different sampling settings produce
+    # distinct cached artifacts.
+    eff_config_for_key = ace_config or ACE_LEGO_CONFIG
+    eff_steps_for_key = inference_steps if inference_steps is not None else ACE_LEGO_STEPS
+    caption_tag = (caption_override[:20] if caption_override else "default")
+    sampler_tag = (
+        f"cfg{eff_config_for_key}-st{eff_steps_for_key}-sh{shift:.1f}-"
+        f"ci{cfg_interval_start:.1f}-{cfg_interval_end:.1f}-g{guidance_scale:.1f}-"
+        f"cap{caption_tag}-src{src_kind}"
+    )
     ace_key = _hash_text(
-        f"{ACE_LEGO_CONFIG}:{ACE_LEGO_STRENGTH}:voc_compressor_v1:{postfx_tag}:"
+        f"{sampler_tag}:voc_compressor_v1:{postfx_tag}:"
         + ",".join(f"{c[0]}-{c[1]}-{c[2]:.2f}-{c[3]:+d}" for c in candidates_used)
     )
     audio_cache = cache_root / audio_key
@@ -702,6 +763,14 @@ def run(
         post_fx_enabled=post_fx_enabled,
         post_fx_consonant_boost_db=post_fx_consonant_boost_db,
         post_fx_breath_level_db=post_fx_breath_level_db,
+        ace_config=ace_config,
+        inference_steps=inference_steps,
+        shift=shift,
+        cfg_interval_start=cfg_interval_start,
+        cfg_interval_end=cfg_interval_end,
+        guidance_scale=guidance_scale,
+        caption_override=caption_override,
+        src_kind=src_kind,
     ):
         if stage_ev == "__result__":
             # Sentinel: unpack and stop iterating

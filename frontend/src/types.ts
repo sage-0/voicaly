@@ -21,6 +21,17 @@ export interface Preset {
   post_fx_enabled: boolean;
   post_fx_consonant_boost_db: number;
   post_fx_breath_level_db: number;
+  // ACE-Step model + sampler fields (added 2026-05-29). All optional on the
+  // wire: older user presets that lack them are filled by the backend's
+  // Pydantic defaults before they reach the frontend.
+  ace_config?: string;
+  inference_steps?: number;
+  shift?: number;
+  cfg_interval_start?: number;
+  cfg_interval_end?: number;
+  guidance_scale?: number;
+  caption_style?: 'baseline' | 'articulation';
+  src_kind?: 'full' | 'vocals';
 }
 
 export interface TranslationRow {

@@ -7,8 +7,12 @@ interface PresetEditorProps {
 }
 
 function HelpIcon({ title }: { title: string }) {
+  // Use a CSS-only tooltip via data-tooltip + ::after (defined in App.css)
+  // instead of the native HTML title attribute, which has a long browser
+  // delay (~1s) and can't be styled. The native title is kept as a fallback
+  // for accessibility / non-JS clients.
   return (
-    <span className="param-help" title={title}>?</span>
+    <span className="param-help" data-tooltip={title} title={title}>?</span>
   );
 }
 
@@ -32,6 +36,7 @@ const DEFAULT_CANDIDATE: PresetCandidate = {
 
 export function PresetEditor({ preset, onChange }: PresetEditorProps) {
   const [candidatesOpen, setCandidatesOpen] = useState(true);
+  const [aceOpen, setAceOpen] = useState(true);
 
   const updateField = <K extends keyof Preset>(key: K, value: Preset[K]) => {
     onChange({ ...preset, [key]: value });
@@ -55,8 +60,193 @@ export function PresetEditor({ preset, onChange }: PresetEditorProps) {
 
   const postFxDisabled = !preset.post_fx_enabled;
 
+  // Resolved values with backend defaults for old presets that lack the new fields
+  const aceConfig = preset.ace_config ?? 'acestep-v15-turbo';
+  const steps = preset.inference_steps ?? 16;
+  const shiftVal = preset.shift ?? 1.0;
+  const cfgStart = preset.cfg_interval_start ?? 0.0;
+  const cfgEnd = preset.cfg_interval_end ?? 1.0;
+  const guidance = preset.guidance_scale ?? 7.0;
+  const captionStyle = preset.caption_style ?? 'baseline';
+  const srcKind = preset.src_kind ?? 'full';
+
+  const inputStyle: React.CSSProperties = {
+    width: 90,
+    background: 'var(--s1)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    color: 'var(--text)',
+    padding: '6px 10px',
+    fontSize: 13,
+    fontFamily: "'DM Mono', monospace",
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* ACE-Step Model + Sampler Section */}
+      <div style={{
+        background: 'var(--s2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r)',
+        overflow: 'hidden',
+      }}>
+        <button
+          onClick={() => setAceOpen(o => !o)}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 16px',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--t2)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--t2)', letterSpacing: '.1em', textTransform: 'uppercase' }}>
+              ACE-Step モデル & サンプラー
+            </span>
+            <HelpIcon title="どの ACE-Step モデルを使い、ノイズ除去のサンプラーをどう動かすか。曲のジャンルに応じて使い分ける" />
+          </div>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+               style={{ transform: aceOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+
+        {aceOpen && (
+          <div style={{
+            borderTop: '1px solid var(--border)',
+            padding: '14px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+            animation: 'fadeUp .2s ease both',
+          }}>
+            {/* ace_config */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="ACE-Step のモデル選択。turbo (2B) は最速・標準 J-pop 向け。xl-turbo (5B) はより明瞭な英語発音。sft (非蒸留) は最高品質だが steps=50 推奨で約2倍遅い。OOD 楽曲では sft が安定する傾向">
+                モデル
+              </FieldLabel>
+              <select
+                value={aceConfig}
+                onChange={e => updateField('ace_config', e.target.value)}
+                style={{
+                  background: 'var(--s1)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text)', fontSize: 13,
+                  padding: '6px 10px', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                <option value="acestep-v15-turbo">acestep-v15-turbo (2B, 高速)</option>
+                <option value="acestep-v15-xl-turbo">acestep-v15-xl-turbo (5B, 明瞭発音)</option>
+                <option value="acestep-v15-sft">acestep-v15-sft (非蒸留, 最高品質・低速)</option>
+              </select>
+            </div>
+
+            {/* inference_steps */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="拡散モデルが波形を仕上げる反復回数。turbo は 16-24 で十分、sft は 50 推奨。多いほど高品質だが線形に遅くなる">
+                推論ステップ数
+              </FieldLabel>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="number" min={4} max={100} step={1} value={steps}
+                  onChange={e => updateField('inference_steps', parseInt(e.target.value, 10) || 16)}
+                  style={inputStyle} />
+                <input type="range" min={4} max={100} step={1} value={steps}
+                  onChange={e => updateField('inference_steps', parseInt(e.target.value, 10))}
+                  style={{ flex: 1, accentColor: 'var(--teal)', cursor: 'pointer' }} />
+              </div>
+            </div>
+
+            {/* shift */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="ノイズスケジュールの傾き。1.0 が均等。値を上げる (2.0-2.5) と前半 (semantic な構造作り) に重みが乗り、「うーうー」が減って子音が明瞭になる。3.0 以上は逆効果になりやすい">
+                shift
+              </FieldLabel>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="number" min={0.5} max={4.0} step={0.1} value={shiftVal}
+                  onChange={e => updateField('shift', parseFloat(e.target.value) || 1.0)}
+                  style={inputStyle} />
+                <input type="range" min={0.5} max={4.0} step={0.1} value={shiftVal}
+                  onChange={e => updateField('shift', parseFloat(e.target.value))}
+                  style={{ flex: 1, accentColor: 'var(--teal)', cursor: 'pointer' }} />
+              </div>
+            </div>
+
+            {/* guidance_scale */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="Classifier-Free Guidance の強さ。7.0 標準。上げる (8-10) と caption/歌詞への追従が強くなるが、過剰だとロボットっぽくなる。5-6 だと自然だが指示が弱い">
+                guidance_scale
+              </FieldLabel>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="number" min={1.0} max={15.0} step={0.5} value={guidance}
+                  onChange={e => updateField('guidance_scale', parseFloat(e.target.value) || 7.0)}
+                  style={inputStyle} />
+                <input type="range" min={1.0} max={15.0} step={0.5} value={guidance}
+                  onChange={e => updateField('guidance_scale', parseFloat(e.target.value))}
+                  style={{ flex: 1, accentColor: 'var(--teal)', cursor: 'pointer' }} />
+              </div>
+            </div>
+
+            {/* cfg_interval */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="CFG (guidance) を適用するノイズステップの範囲 (0.0-1.0)。デフォルトは全区間 [0, 1]。終端を 0.7-0.8 に下げると、後半に CFG を切ることで子音歪み・ノイズが減る">
+                cfg_interval [開始, 終了]
+              </FieldLabel>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="number" min={0.0} max={1.0} step={0.05} value={cfgStart}
+                  onChange={e => updateField('cfg_interval_start', parseFloat(e.target.value) || 0.0)}
+                  style={inputStyle} />
+                <span style={{ color: 'var(--t3)' }}>〜</span>
+                <input type="number" min={0.0} max={1.0} step={0.05} value={cfgEnd}
+                  onChange={e => updateField('cfg_interval_end', parseFloat(e.target.value) || 1.0)}
+                  style={inputStyle} />
+              </div>
+            </div>
+
+            {/* caption_style */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="モデルに渡す英語キャプション。baseline = 「原曲メロディに乗せて歌う」標準。articulation = 「子音を強調、母音を一つずつ発音」と明示して英語明瞭度を上げる。「うーうー」が気になるなら articulation">
+                キャプションスタイル
+              </FieldLabel>
+              <select
+                value={captionStyle}
+                onChange={e => updateField('caption_style', e.target.value as 'baseline' | 'articulation')}
+                style={{
+                  background: 'var(--s1)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text)', fontSize: 13,
+                  padding: '6px 10px', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                <option value="baseline">baseline (標準)</option>
+                <option value="articulation">articulation (明瞭発音強調)</option>
+              </select>
+            </div>
+
+            {/* src_kind */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <FieldLabel help="ACE-Step に渡す src_audio の種類。full = アップロードした音源そのまま (標準)。vocals = Demucs で分離した日本語ボーカル単独。vocals はピッチ追従が劇的に上がるが、日本語音素が漏れやすく声質が荒くなる — Niki『lower』のような OOD 楽曲でのみ推奨">
+                src_audio の種類
+              </FieldLabel>
+              <select
+                value={srcKind}
+                onChange={e => updateField('src_kind', e.target.value as 'full' | 'vocals')}
+                style={{
+                  background: 'var(--s1)', border: '1px solid var(--border)',
+                  borderRadius: 6, color: 'var(--text)', fontSize: 13,
+                  padding: '6px 10px', cursor: 'pointer', outline: 'none',
+                }}
+              >
+                <option value="full">full (フル音源)</option>
+                <option value="vocals">vocals (分離ボーカルのみ)</option>
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Post-FX Section */}
       <div style={{
