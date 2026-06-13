@@ -1,19 +1,10 @@
 import { useState } from 'react';
 import type { Preset, PresetCandidate } from '../types';
+import { HelpIcon } from './HelpIcon';
 
 interface PresetEditorProps {
   preset: Preset;
   onChange: (preset: Preset) => void;
-}
-
-function HelpIcon({ title }: { title: string }) {
-  // Use a CSS-only tooltip via data-tooltip + ::after (defined in App.css)
-  // instead of the native HTML title attribute, which has a long browser
-  // delay (~1s) and can't be styled. The native title is kept as a fallback
-  // for accessibility / non-JS clients.
-  return (
-    <span className="param-help" data-tooltip={title} title={title}>?</span>
-  );
 }
 
 function FieldLabel({ children, help }: { children: React.ReactNode; help: string }) {

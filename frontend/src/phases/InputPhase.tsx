@@ -3,6 +3,7 @@ import type { GenConfig, TranslationModel, CoverModel, GenParams, Preset } from 
 import { listPresets } from '../api/client';
 import { ModelPills, type ModelDef } from '../components/ModelPills';
 import { PresetEditor } from '../components/PresetEditor';
+import { HelpIcon } from '../components/HelpIcon';
 import { Waveform } from '../components/Waveform';
 import { SectionLabel } from '../components/SectionLabel';
 
@@ -10,10 +11,12 @@ interface InputPhaseProps {
   onGenerate: (config: GenConfig) => void;
 }
 
-// Translation: only DPO-finetuned Gemma is wired up today. The pill list
-// is a single item so the UI shape stays consistent when we add more later.
+// Translation: 3 DPO-finetuned Gemma models available. Default is gemma-dpo
+// (gemma-2 2B). gemma3-dpo (4B) and gemma4-dpo (E2B) are selectable.
 const T_MODELS: ModelDef[] = [
-  { id: 'gemma-dpo', label: 'DPO Gemma 2B', org: 'Custom', clr: '#d4720d' },
+  { id: 'gemma-dpo',  label: 'DPO Gemma 2B',   org: 'gemma-2 jpn-it',  clr: '#d4720d' },
+  { id: 'gemma3-dpo', label: 'DPO Gemma 3 4B',  org: 'gemma-3-4b-it',   clr: '#14b8a6' },
+  { id: 'gemma4-dpo', label: 'DPO Gemma 4 E2B', org: 'gemma-4-E2B-it',  clr: '#8b5cf6' },
 ];
 
 // Cover generation: only ACE-Step v1 is wired up. Other engines (v2 fast,
@@ -190,11 +193,7 @@ export function InputPhase({ onGenerate }: InputPhaseProps) {
               <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase' }}>
                 Preset
               </span>
-              <span
-                className="param-help"
-                data-tooltip="ACE-Step に渡すモデル・サンプラー設定・候補リスト・後処理設定の組合せ。曲のジャンルや品質要件に応じて切り替えます。各プリセットの内容は下の Edit Preset で確認・編集できます"
-                title="ACE-Step に渡すモデル・サンプラー設定・候補リスト・後処理設定の組合せ。曲のジャンルや品質要件に応じて切り替えます"
-              >?</span>
+              <HelpIcon title="ACE-Step に渡すモデル・サンプラー設定・候補リスト・後処理設定の組合せ。曲のジャンルや品質要件に応じて切り替えます。各プリセットの内容は下の Edit Preset で確認・編集できます" />
             </div>
             <select
               value={selectedPresetId}

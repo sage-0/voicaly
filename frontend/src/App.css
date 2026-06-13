@@ -133,8 +133,6 @@ html, body, #root {
   border: 1px solid var(--border);
   transition: background .15s, color .15s;
   vertical-align: middle;
-  /* needed for the ::after popover positioning */
-  position: relative;
 }
 
 .param-help:hover {
@@ -142,17 +140,16 @@ html, body, #root {
   color: var(--t2);
 }
 
-/* Custom popover-style tooltip — fires on hover/focus without the ~1s native
-   `title` delay and supports multi-line wrapped text. Falls back to the
-   native `title` attribute on touch devices that don't have :hover. */
-.param-help[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: 130%;
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
+/* Description popover (see HelpIcon.tsx). Rendered into <body> via a React
+   portal with position:fixed, so it is NOT clipped by ancestor overflow
+   (the accordion panels use overflow:hidden, the Candidates table uses
+   overflow-x:auto). The old ::after child was clipped by those and got cut
+   off / hidden behind the UI near section tops and table headers.
+   left/top are set inline from JS; the class only flips the anchor. */
+.param-tooltip {
+  position: fixed;
   min-width: 220px;
-  max-width: 360px;
+  max-width: 320px;
   background: var(--s1);
   color: var(--text);
   border: 1px solid var(--border);
@@ -166,16 +163,17 @@ html, body, #root {
   text-align: left;
   white-space: normal;
   pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity .15s, transform .15s, visibility .15s;
-  z-index: 50;
+  z-index: 1000;
   box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  animation: tooltipFade .12s ease both;
 }
 
-.param-help[data-tooltip]:hover::after,
-.param-help[data-tooltip]:focus::after {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
+/* anchor (left,top) is just above / just below the icon → shift the box up
+   by its full height for the "top" placement. */
+.param-tooltip--top    { transform: translate(-50%, -100%); }
+.param-tooltip--bottom { transform: translate(-50%, 0); }
+
+@keyframes tooltipFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
