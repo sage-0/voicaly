@@ -1,4 +1,6 @@
 # Voicaly
+<img width="1561" height="896" alt="image" src="https://github.com/user-attachments/assets/1a7e8c6e-d078-4fa8-bd30-214a6191ab97" />
+<img width="962" height="741" alt="スクリーンショット 2026-05-22 11 24 51" src="https://github.com/user-attachments/assets/6f32b308-a277-4893-bd78-13618fc2a40a" />
 
 日本語の歌が入った音源と歌詞をアップロードすると、**英訳した歌詞で歌い直した音源**を生成し、
 ブラウザで再生・ダウンロードできる Web アプリです。翻訳モデルは好きなものに差し替えて使えます。
