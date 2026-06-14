@@ -69,6 +69,23 @@ TRANSLATION_MODELS = {
 DEFAULT_TRANSLATION_MODEL = "gemma-dpo"
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
+
+def _is_hf_repo_id(value: str) -> bool:
+    """True if value looks like a HuggingFace repo id (``org/name``) rather than
+    a local filesystem path."""
+    return "/" in value and not os.path.isabs(value)
+
+
+def _translation_model_available(slot: str, path: str) -> bool:
+    """A slot is usable if its path is a local model/adapter directory, or —
+    for the primary (default) slot only — a HuggingFace repo id that
+    transformers will download on first use. This lets the BYO deployment set
+    ``DPO_MODEL_PATH`` to any HF model id (e.g. ``org/my-model``) and run
+    immediately, while gemma3/gemma4 slots still require a deployed directory."""
+    if os.path.isdir(path):
+        return True
+    return slot == DEFAULT_TRANSLATION_MODEL and _is_hf_repo_id(path)
+
 # Resource limits — bound memory usage from a single authenticated upload.
 MAX_AUDIO_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_LYRICS_LEN = 10_000              # ~10 KB
@@ -152,7 +169,7 @@ async def create_job(
             detail=f"unknown translation_model: {translation_model}",
         )
     resolved_model_path = TRANSLATION_MODELS[translation_model]
-    if not os.path.isdir(resolved_model_path):
+    if not _translation_model_available(translation_model, resolved_model_path):
         raise HTTPException(
             status_code=400,
             detail=f"translation model '{translation_model}' is not deployed on this host",

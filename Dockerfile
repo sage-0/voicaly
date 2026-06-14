@@ -14,10 +14,11 @@
 #   5. Clone & install ACE-Step v1.5 (needs Python ≥ 3.11)
 #   6. Copy app source + frontend dist
 #
-# Run-time expectations:
-#   - Mount the host's ACE-Step v1.5 model snapshot to /app/models/ace-step-v1.5
-#   - Mount the DPO Gemma adapter to /app/models/gemma-dpo-final
-#   - Mount a writable cache directory to /app/cache
+# Run-time expectations (see docker-compose.yml):
+#   - ACE-Step v1.5 checkpoints auto-download to /app/ace-checkpoints on first run
+#   - Translation adapter(s) under /app/models (committed in the lab build, or
+#     bring-your-own); or set DPO_MODEL_PATH to a HuggingFace repo id
+#   - Writable cache at /app/cache, HuggingFace cache at /app/.hf
 #   - Bind GPU: --gpus all
 
 # ---- Stage 1: フロントエンドビルド -----------------------------------------
@@ -38,7 +39,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     GRADIO_HOST=0.0.0.0 \
     GRADIO_PORT=7860 \
-    ACE_CKPT_DIR=/app/models/ace-step-v1.5 \
+    ACE_CKPT_DIR=/app/ace-checkpoints \
     DPO_MODEL_PATH=/app/models/gemma-dpo-final \
     PIPELINE_CACHE_ROOT=/app/cache \
     HF_HOME=/app/.hf
@@ -76,8 +77,9 @@ RUN git clone --depth 1 https://github.com/ace-step/ACE-Step-1.5.git /opt/ACE-St
 # ---- 5. App source ------------------------------------------------------
 COPY src /app/src
 
-# Cache and models are mount points; they're created at runtime.
-RUN mkdir -p /app/cache /app/models /app/.hf /app/frontend/dist
+# Cache, models and checkpoint dirs are mount points; created here so the
+# container can start even before the named volumes are populated.
+RUN mkdir -p /app/cache /app/models /app/.hf /app/ace-checkpoints /app/frontend/dist
 
 # フロントエンドの静的ファイルをコピー
 COPY --from=frontend-build /build/dist /app/frontend/dist

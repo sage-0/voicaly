@@ -1,22 +1,34 @@
 services:
   webapp:
-    image: lyrics-webapp:latest
-    container_name: lyrics-webapp
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voicaly-webapp:latest
+    container_name: voicaly-webapp
     restart: unless-stopped
     ports:
       - "${WEBAPP_PORT:-7860}:7860"
     volumes:
-      # All paths must be absolute and host-visible (compose runs inside a
-      # devcontainer whose CWD does not match the host filesystem).
-      - ${MODELS_DIR}:/app/models:ro
-      - ${CACHE_DIR}:/app/cache
-      - ${HF_DIR}:/app/.hf
+      # Translation models/adapters. In the lab build these are committed under
+      # ./models; in the BYO build, drop your own adapter dir here (or point
+      # DPO_MODEL_PATH at a HuggingFace repo id and skip this).
+      - ./models:/app/models:ro
+      # Large auto-downloaded artifacts live in named volumes so they survive
+      # `docker compose down` / image rebuilds and are not re-downloaded.
+      - hf_cache:/app/.hf                      # HuggingFace cache (base models, ~5-10GB)
+      - ace_checkpoints:/app/ace-checkpoints   # ACE-Step v1.5 checkpoints (~33GB, first-run download)
+      - pipeline_cache:/app/cache              # separated stems, translations, ACE candidates
     environment:
-      # Override these by setting them in your shell or a `.env` file.
-      ACE_CKPT_DIR: /app/models/ace-step-v1.5
-      DPO_MODEL_PATH: /app/models/gemma-dpo-final
+      # ACE-Step checkpoints auto-download here on first run.
+      ACE_CKPT_DIR: /app/ace-checkpoints
+      # Translation model: a path under /app/models, or a HuggingFace repo id.
+      DPO_MODEL_PATH: ${DPO_MODEL_PATH:-/app/models/gemma-dpo-final}
       PIPELINE_CACHE_ROOT: /app/cache
       HF_HOME: /app/.hf
+      GEMMA4_SERVICE_URL: http://gemma4-svc:8000
+      # Only needed for gated base models (e.g. google/gemma-*). Leave blank otherwise.
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
     deploy:
       resources:
         reservations:
@@ -24,3 +36,40 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Optional: gemma4-dpo translation microservice (transformers 5.x).
+  # Disabled by default. Enable with:  docker compose --profile gemma4 up --build
+  # Requires: an HF token for the gated google/gemma-4-E2B-it base, and the
+  # gemma4-dpo adapter mounted at ./models/gemma4-dpo.
+  # ---------------------------------------------------------------------------
+  gemma4-svc:
+    profiles: ["gemma4"]
+    build:
+      context: ./gemma4_service
+      dockerfile: Dockerfile
+    image: voicaly-gemma4-svc:latest
+    container_name: gemma4-svc
+    restart: unless-stopped
+    volumes:
+      - ./models:/workspace/models:ro
+      - hf_cache:/workspace/.hf
+    environment:
+      HF_HOME: /workspace/.hf
+      GEMMA4_BASE: google/gemma-4-E2B-it
+      GEMMA4_ADAPTER: /workspace/models/gemma4-dpo
+      GEMMA4_PORT: "8000"
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf_cache:
+  ace_checkpoints:
+  pipeline_cache:

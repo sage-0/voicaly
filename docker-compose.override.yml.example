@@ -1,0 +1,14 @@
+# Optional overrides — reuse existing host-side downloads.
+# Copy to `docker-compose.override.yml` (gitignored) and edit the host paths.
+#
+# By default the app auto-downloads ACE-Step v1.5 (~33GB) and base models into
+# named volumes on first run. If you already have these on this machine, bind
+# them here to skip the download. Each entry's container path matches an entry
+# in docker-compose.yml, so the bind mount replaces the named volume.
+services:
+  webapp:
+    volumes:
+      # Existing ACE-Step v1.5 checkpoint snapshot (~33GB).
+      - /path/to/ace-step-v1.5:/app/ace-checkpoints
+      # Existing HuggingFace cache (already-downloaded base models).
+      - /path/to/.hf_cache:/app/.hf
