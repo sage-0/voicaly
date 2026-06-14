@@ -7,6 +7,22 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 
 class LyricsTranslator:
+    @staticmethod
+    def _load_tokenizer(path: str):
+        """Load a tokenizer, working around tokenizer configs that ship
+        ``extra_special_tokens`` as a list (e.g. google/gemma-4-E2B-it's
+        ['<|video|>']). transformers 4.57.x expects a dict there and crashes
+        with "'list' object has no attribute 'keys'". Those tokens are
+        irrelevant to text translation and remain in the vocab regardless, so
+        we retry with an empty dict. gemma-2 / gemma-3 take the normal path
+        unchanged (their extra_special_tokens is a dict or absent)."""
+        try:
+            return AutoTokenizer.from_pretrained(path)
+        except AttributeError as e:
+            if "has no attribute 'keys'" in str(e):
+                return AutoTokenizer.from_pretrained(path, extra_special_tokens={})
+            raise
+
     def __init__(self, model_path: str, device: str = None):
         self.kks = pykakasi.kakasi()
         if device is None:
@@ -21,18 +37,19 @@ class LyricsTranslator:
         if is_peft:
             with open(os.path.join(model_path, "adapter_config.json"), "r") as f:
                 adapter_config = json.load(f)
-            base_model_path = adapter_config.get("base_model_name_or_path", "webbigdata/gemma-2-2b-jpn-it-translate")
-            print(f"Detected PEFT adapter. Loading base model: {base_model_path}")
-            self.tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+            self.base_model_path = adapter_config.get("base_model_name_or_path", "webbigdata/gemma-2-2b-jpn-it-translate")
+            print(f"Detected PEFT adapter. Loading base model: {self.base_model_path}")
+            self.tokenizer = self._load_tokenizer(self.base_model_path)
             self.model = AutoModelForCausalLM.from_pretrained(
-                base_model_path,
+                self.base_model_path,
                 torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
                 device_map="auto" if self.device == "cuda" else None
             )
             from peft import PeftModel
             self.model = PeftModel.from_pretrained(self.model, model_path)
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.base_model_path = model_path
+            self.tokenizer = self._load_tokenizer(model_path)
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
@@ -69,6 +86,33 @@ class LyricsTranslator:
         mora_list = re_mora.findall(kana)
         return len(mora_list)
 
+    def _is_chat_template_model(self) -> bool:
+        """Return True when the base model is gemma-3 or gemma-4 (uses apply_chat_template)."""
+        name = self.base_model_path.lower()
+        return any(tag in name for tag in ("gemma-3", "gemma-4", "gemma3", "gemma4"))
+
+    def build_prompt_chat_template(self, japanese_text: str) -> str:
+        """Build prompt via tokenizer.apply_chat_template for gemma-3/4 models.
+
+        The user message body is byte-identical to the training data in
+        dpo_dataset_g3.jsonl / dpo_dataset_g4.jsonl (USER_MSG_TEMPLATE in
+        exp34/sft_train.py / create_dpo_pairs.py).  No syllable constraint is
+        included because it was not part of the training data.
+        """
+        user_content = (
+            "You are a highly skilled professional Japanese-English and English-Japanese translator. "
+            "Translate the given text accurately.\n\n"
+            "Translate Japanese to English.\n"
+            f"Source: {japanese_text}\n"
+            "Target:"
+        )
+        messages = [{"role": "user", "content": user_content}]
+        return self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+
     def build_prompt(self, japanese_text: str, target_syllables: int) -> str:
         """Construct the prompt for the DPO-trained model."""
         sys_prompt = (
@@ -92,7 +136,10 @@ class LyricsTranslator:
     def _translate_one(self, line: str, max_new_tokens: int, temperature: float, top_p: float) -> dict:
         """Translate a single line and return the raw result dict."""
         mora_count = self.count_mora(line)
-        prompt = self.build_prompt(line, mora_count)
+        if self._is_chat_template_model():
+            prompt = self.build_prompt_chat_template(line)
+        else:
+            prompt = self.build_prompt(line, mora_count)
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
 

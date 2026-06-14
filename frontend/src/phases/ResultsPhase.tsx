@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { JobResult, GenConfig, Candidate } from '../types';
-import { savePreset } from '../api/client';
+import { savePreset, getJobReport } from '../api/client';
 import { Player, type PlayerHandle } from '../components/Player';
 import { SectionLabel } from '../components/SectionLabel';
 import { buildTranslationMarkdown, downloadTextFile, suggestedFilename } from '../utils/export';
@@ -8,6 +8,7 @@ import { buildTranslationMarkdown, downloadTextFile, suggestedFilename } from '.
 interface ResultsPhaseProps {
   result: JobResult;
   config: GenConfig;
+  jobId: string;
   onReset: () => void;
 }
 
@@ -27,7 +28,7 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
-export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
+export function ResultsPhase({ result, config, jobId, onReset }: ResultsPhaseProps) {
   const [selectedCand, setSelectedCand] = useState<Candidate>(
     result.candidates[0] ?? {
       rank: 1,
@@ -54,10 +55,22 @@ export function ResultsPhase({ result, config, onReset }: ResultsPhaseProps) {
   };
 
   // Export the translation + the parameters that produced it as a Markdown
-  // file. The user explicitly asked for the config to be included so they
-  // can reproduce this exact run later.
-  const onDownloadTranslation = () => {
-    const md = buildTranslationMarkdown(result, config, selectedCand ?? null);
+  // file. Also fetches the /report endpoint to append Whisper transcripts
+  // (export-only — transcripts are never shown in the UI).
+  const onDownloadTranslation = async () => {
+    let transcripts: { rank: number; tag: string; score: number; transcript: string }[] | undefined;
+    try {
+      const report = await getJobReport(jobId);
+      transcripts = report.candidates.map(c => ({
+        rank: c.rank,
+        tag: c.tag,
+        score: c.score,
+        transcript: c.transcript,
+      }));
+    } catch (e) {
+      console.warn('[Results] Failed to fetch report for transcripts, exporting without:', e);
+    }
+    const md = buildTranslationMarkdown(result, config, selectedCand ?? null, transcripts);
     const filename = suggestedFilename(config.audioFile?.name, 'md');
     console.info('[Results] downloading translation →', filename);
     downloadTextFile(md, filename, 'text/markdown');

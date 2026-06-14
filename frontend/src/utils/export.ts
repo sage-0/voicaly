@@ -9,6 +9,7 @@ export function buildTranslationMarkdown(
   result: JobResult,
   config: GenConfig,
   selected: Candidate | null,
+  transcripts?: { rank: number; tag: string; score: number; transcript: string }[],
 ): string {
   const p = config.params;
   const now = new Date();
@@ -68,6 +69,20 @@ export function buildTranslationMarkdown(
     lines.push(`| ${row.id} | ${escapeMd(row.ja)} | ${row.mora} | ${escapeMd(row.en)} |`);
   }
   lines.push('');
+
+  if (transcripts && transcripts.length > 0) {
+    lines.push('## Whisper 文字起こし（評価用・デモ非表示）');
+    lines.push('');
+    lines.push('各候補のAI歌唱を Demucs+Whisper で文字起こしした生テキスト（word_overlap スコアの根拠）。');
+    lines.push('');
+    const sorted = [...transcripts].sort((a, b) => a.rank - b.rank);
+    for (const t of sorted) {
+      lines.push(`### #${t.rank} \`${escapeMd(t.tag)}\`  (score: ${t.score.toFixed(4)})`);
+      lines.push('');
+      lines.push(`> ${t.transcript ? escapeMd(t.transcript) : '(認識テキストなし)'}`);
+      lines.push('');
+    }
+  }
 
   return lines.join('\n');
 }

@@ -146,8 +146,18 @@ def _handle_pipeline_event(
             "translation": translation,
             # Keep full paths for audio serving — kept under "_raw_candidates"
             # so they never leak into the JSON returned by GET /result.
+            # transcript is stored here for the /report endpoint only.
             "_raw_candidates": [
-                {"tag": c["tag"], "final_wav": c["final_wav"]}
+                {
+                    "tag": c["tag"],
+                    "final_wav": c["final_wav"],
+                    "score": c.get("score", 0.0),
+                    "seed": c.get("seed", 0),
+                    "strength": c.get("strength", 0.0),
+                    "mode": c.get("mode", ""),
+                    "vocal_db": c.get("vocal_db", 0),
+                    "transcript": c.get("transcript", ""),
+                }
                 for c in candidates
             ],
         }

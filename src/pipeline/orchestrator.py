@@ -95,12 +95,18 @@ def _hash_text(text: str) -> str:
 
 
 def _clean_meta(text: str) -> str:
-    """Strip LLM meta-commentary from a translation candidate."""
+    """Strip LLM meta-commentary and markdown emphasis from a translation candidate."""
     cuts = ["How do you want", "I'm not sure", "Can you give", "Note:", "  /  /"]
     for c in cuts:
         idx = text.find(c)
         if idx >= 0:
             text = text[:idx]
+    # Some models (e.g. gemma-4) wrap output in markdown, e.g. "**Become a flower**".
+    # Remove emphasis markers and leading bullet/heading/quote markers, keeping the
+    # inner text. Plain output (gemma-2 / gemma-3) is unaffected.
+    text = text.replace("**", "").replace("__", "")
+    text = re.sub(r"^\s*(?:[#>\-\*]\s+)+", "", text)  # leading "# " ">" "- " "* "
+    text = text.strip(" *_`\"'")
     return text.strip()
 
 
@@ -176,9 +182,9 @@ def _stage_translate(
         yield "result", cached
         return
 
+    import gc
     import torch
 
-    from src.translator.lyrics_translator import LyricsTranslator
     from src.translator.sanitize import parse_translation
 
     torch.manual_seed(42)
@@ -186,7 +192,14 @@ def _stage_translate(
         torch.cuda.manual_seed_all(42)
 
     print(f"[translate] Loading DPO model from {model_path}", flush=True)
-    tr = LyricsTranslator(model_path=model_path)
+    is_gemma4 = model_path.rstrip("/").endswith("gemma4-dpo") or "gemma4-dpo" in model_path
+    if is_gemma4:
+        from src.translator.remote_translator import RemoteTranslator
+        import os as _os
+        tr = RemoteTranslator(_os.environ.get("GEMMA4_SERVICE_URL", "http://gemma4-svc:8000"))
+    else:
+        from src.translator.lyrics_translator import LyricsTranslator
+        tr = LyricsTranslator(model_path=model_path)
     lyrics_lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
     total = len(lyrics_lines)
     print(f"[translate] Translating {total} lines", flush=True)
@@ -216,6 +229,17 @@ def _stage_translate(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
     print(f"[translate] Done. Cached to {out_path}", flush=True)
+
+    # Free the translation model's VRAM before ACE-Step loads — the two
+    # stages run sequentially, so the GPU need not hold both. Without an
+    # explicit del + gc.collect + empty_cache, reference cycles and PyTorch's
+    # caching allocator keep gemma resident and can OOM the ACE-Step stage
+    # (especially gemma-3 4B).
+    del tr
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     yield "result", cleaned
 
 
@@ -224,7 +248,7 @@ _WHISPER_MODEL = None
 
 def _whisper_lyric_score(
     wav_path: Path, workspace: Path, target_words: set[str]
-) -> tuple[float, str]:
+) -> tuple[float, str, str]:
     """Score a candidate by how many target lyric words Whisper recognizes in it.
 
     1. Demucs the candidate → vocals.wav (isolating the singing)
@@ -261,7 +285,7 @@ def _whisper_lyric_score(
     transcript_words = set(re.findall(r"[a-z']+", transcript))
 
     if not target_words:
-        return 0.0, transcript
+        return 0.0, transcript, transcript
     overlap = len(target_words & transcript_words) / max(len(target_words), 1)
 
     # Quick sanity stats so we can read the candidate logs in flight.
@@ -269,7 +293,8 @@ def _whisper_lyric_score(
     if data.ndim == 2:
         data = data.mean(axis=1)
     dur = len(data) / sr
-    return overlap, f"{transcript[:80]}... ({dur:.1f}s, {len(transcript_words)} unique words)"
+    detail = f"{transcript[:80]}... ({dur:.1f}s, {len(transcript_words)} unique words)"
+    return overlap, detail, transcript
 
 
 def _stage_ace_generate(
@@ -384,7 +409,7 @@ def _stage_ace_generate(
     from src.pipeline.mix import mix_tracks
     from src.separation.demucs_runner import separate
 
-    scores: list[tuple[float, str, int, float, float, Path, str]] = []  # (score, mode, seed, strength, vocal_db, final_wav, detail)
+    scores: list[tuple[float, str, int, float, float, Path, str, str]] = []  # (score, mode, seed, strength, vocal_db, final_wav, detail, transcript)
 
     # ---- Warmup ------------------------------------------------------
     # Empirically, an M1-replica warmup (lego, seed=42, str=0.40) produced
@@ -502,14 +527,14 @@ def _stage_ace_generate(
         # Score on the candidate's vocals via Demucs + Whisper.
         yield _log(f"[{i+1}/{n}] Demucs 2nd pass on candidate...")
         try:
-            score, detail = _whisper_lyric_score(
+            score, detail, transcript = _whisper_lyric_score(
                 cand_path, per_dir / "demucs_score", target_words
             )
             yield _log(f"[{i+1}/{n}] Whisper scoring: word_overlap={score:.3f}")
         except Exception as e:
             print(f"  [best-of-N] {tag} score FAILED: {e}")
             yield _log(f"[{i+1}/{n}] Whisper scoring FAILED: {e}", level="warn")
-            score, detail = -1.0, str(e)
+            score, detail, transcript = -1.0, str(e), ""
 
         # Build the candidate-specific final wav for ranking parity.
         final_path = per_dir / "final.wav"
@@ -543,12 +568,12 @@ def _stage_ace_generate(
 
         yield _log(f"[{i+1}/{n}] Final mix written to {final_path.name}")
         print(f"  [best-of-N] {tag:48s}  word_overlap={score:.3f}  {detail}")
-        scores.append((score, mode, seed, strength, vocal_db, final_path, detail))
+        scores.append((score, mode, seed, strength, vocal_db, final_path, detail, transcript))
 
     if not scores:
         raise RuntimeError("ACE-Step produced no candidates")
     scores.sort(key=lambda t: t[0], reverse=True)
-    best_score, best_mode, best_seed, best_strength, best_vocal_db, best_path, _ = scores[0]
+    best_score, best_mode, best_seed, best_strength, best_vocal_db, best_path, _, _transcript = scores[0]
     best_tag = f"{best_mode}_seed{best_seed}_str{best_strength:.2f}_voc{best_vocal_db:+d}db"
     print(f"  [best-of-N] PICKED {best_tag} word_overlap={best_score:.3f}")
     yield _log(f"PICKED: {best_tag} (score={best_score:.3f})")
@@ -566,8 +591,9 @@ def _stage_ace_generate(
             "score": float(score),
             "final_wav": str(final_path),
             "detail": detail,
+            "transcript": transcript,
         }
-        for score, mode, seed, strength, vocal_db, final_path, detail in scores
+        for score, mode, seed, strength, vocal_db, final_path, detail, transcript in scores
     ]
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), "utf-8")
     yield ("__result__", None, (final_out, best_tag, manifest))

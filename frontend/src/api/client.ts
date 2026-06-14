@@ -65,3 +65,15 @@ export async function deletePreset(presetId: string): Promise<void> {
   const res = await fetch(`/api/presets/${presetId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete preset');
 }
+
+export interface JobReport {
+  job_id: string;
+  translation: { id: number; ja: string; mora: number; en: string }[];
+  candidates: { rank: number; tag: string; score: number; seed: number; strength: number; mode: string; vocal_db: number; transcript: string }[];
+}
+
+export async function getJobReport(jobId: string): Promise<JobReport> {
+  const res = await fetch(`/api/jobs/${jobId}/report`);
+  if (!res.ok) throw new Error(`Failed to fetch report: ${res.status}`);
+  return res.json();
+}

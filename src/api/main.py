@@ -60,6 +60,13 @@ app.add_middleware(
 UPLOAD_ROOT = Path(os.environ.get("UPLOAD_ROOT", "/tmp/utaime"))
 CACHE_ROOT = Path(os.environ.get("PIPELINE_CACHE_ROOT", "/app/cache"))
 DPO_MODEL = os.environ.get("DPO_MODEL_PATH", "/app/models/gemma-dpo-final")
+_MODELS_ROOT = Path(DPO_MODEL).parent
+TRANSLATION_MODELS = {
+    "gemma-dpo":  DPO_MODEL,
+    "gemma3-dpo": str(_MODELS_ROOT / "gemma3-dpo"),
+    "gemma4-dpo": str(_MODELS_ROOT / "gemma4-dpo"),
+}
+DEFAULT_TRANSLATION_MODEL = "gemma-dpo"
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 # Resource limits — bound memory usage from a single authenticated upload.
@@ -129,7 +136,7 @@ async def create_job(
     audio_file: UploadFile,
     lyrics: str = Form(...),
     preset_json: str = Form(...),
-    translation_model: str = Form("gemma"),
+    translation_model: str = Form(DEFAULT_TRANSLATION_MODEL),
     cover_model: str = Form("ace1"),
 ) -> JSONResponse:
     # ---- Validate preset ----
@@ -137,6 +144,19 @@ async def create_job(
         preset = Preset(**json.loads(preset_json))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid preset_json: {exc}")
+
+    # ---- Validate translation model ----
+    if translation_model not in TRANSLATION_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown translation_model: {translation_model}",
+        )
+    resolved_model_path = TRANSLATION_MODELS[translation_model]
+    if not os.path.isdir(resolved_model_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"translation model '{translation_model}' is not deployed on this host",
+        )
 
     # ---- Validate lyrics ----
     if not lyrics.strip():
@@ -171,9 +191,9 @@ async def create_job(
     audio_path.write_bytes(content)
 
     logger.info(
-        "[job %s] POST /api/jobs accepted — audio=%s (%d bytes), t_model=%s, c_model=%s, "
+        "[job %s] POST /api/jobs accepted — audio=%s (%d bytes), t_model=%s (resolved=%s), c_model=%s, "
         "preset=%s, post_fx=%s, lyrics=%d chars",
-        job_id, audio_file.filename, len(content), translation_model, cover_model,
+        job_id, audio_file.filename, len(content), translation_model, resolved_model_path, cover_model,
         preset.id, preset.post_fx_enabled, len(lyrics),
     )
 
@@ -181,7 +201,7 @@ async def create_job(
         job_id=job_id,
         audio_path=audio_path,
         lyrics=lyrics,
-        dpo_model_path=DPO_MODEL,
+        dpo_model_path=resolved_model_path,
         cache_root=CACHE_ROOT,
         preset=preset,
     )
@@ -283,6 +303,56 @@ async def serve_audio(job_id: str, filename: str) -> FileResponse:
             return FileResponse(str(wav_path), media_type="audio/wav")
 
     raise HTTPException(status_code=404, detail="audio file not found")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/jobs/{job_id}/report  — downloadable JSON report with transcripts
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/jobs/{job_id}/report")
+async def get_report(job_id: str) -> JSONResponse:
+    """Return a full report JSON (with Whisper transcripts) as a download.
+
+    Shape:
+        {
+            "job_id": "...",
+            "translation": [{"id":1,"ja":"...","mora":7,"en":"..."}, ...],
+            "candidates": [{"rank":1,"tag":"...","score":0.83,"seed":42,
+                            "strength":0.45,"mode":"lego","vocal_db":0,
+                            "transcript":"<whisper full transcript>"}, ...]
+        }
+    """
+    job = jobs_module.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    result = job.get("result")
+    if not result:
+        raise HTTPException(status_code=404, detail="result not ready")
+
+    raw_candidates = result.get("_raw_candidates", [])
+    report_candidates = []
+    for i, rc in enumerate(raw_candidates):
+        report_candidates.append({
+            "rank": i + 1,
+            "tag": rc.get("tag", ""),
+            "score": rc.get("score", 0.0),
+            "seed": rc.get("seed", 0),
+            "strength": rc.get("strength", 0.0),
+            "mode": rc.get("mode", ""),
+            "vocal_db": rc.get("vocal_db", 0),
+            "transcript": rc.get("transcript", ""),
+        })
+
+    report = {
+        "job_id": job_id,
+        "translation": result.get("translation", []),
+        "candidates": report_candidates,
+    }
+    return JSONResponse(
+        report,
+        headers={"Content-Disposition": f'attachment; filename="utaime_report_{job_id}.json"'},
+    )
 
 
 # ---------------------------------------------------------------------------

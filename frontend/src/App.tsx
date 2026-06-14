@@ -8,7 +8,7 @@ import { ResultsPhase } from './phases/ResultsPhase';
 type AppState =
   | { phase: 'input' }
   | { phase: 'processing'; config: GenConfig; jobId: string }
-  | { phase: 'results'; result: JobResult; config: GenConfig };
+  | { phase: 'results'; result: JobResult; config: GenConfig; jobId: string };
 
 const PHASES = ['Input', 'Processing', 'Results'] as const;
 
@@ -56,7 +56,7 @@ export default function App() {
 
   const handleComplete = (result: JobResult) => {
     if (state.phase === 'processing') {
-      setState({ phase: 'results', result, config: state.config });
+      setState({ phase: 'results', result, config: state.config, jobId: state.jobId });
     }
   };
 
@@ -120,6 +120,7 @@ export default function App() {
           <ResultsPhase
             result={state.result}
             config={state.config}
+            jobId={state.jobId}
             onReset={handleReset}
           />
         )}
